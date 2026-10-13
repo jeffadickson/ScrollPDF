@@ -20,6 +20,7 @@ public sealed class MainForm : Form
     private Rectangle? bounds;
     private CapturePipeline? pipeline;
     private RawFrameRecorder? recorder;
+    private string? zipDestination;
     private bool finishing;
     private int zipPercent = -1;
     private bool handlingUnexpectedStop;
@@ -96,11 +97,12 @@ public sealed class MainForm : Form
         if (bounds is null) { MessageBox.Show("Select a screen region first."); return; }
         if (rawOnly.Checked)
         {
-            using var chooser = new FolderBrowserDialog { Description = "Choose a new or empty folder for frame PNG files" };
+            using var chooser = new SaveFileDialog { Filter="ZIP archive (*.zip)|*.zip", DefaultExt="zip", FileName=$"ScrollPDF-{DateTime.Now:yyyyMMdd-HHmmss}.zip" };
             if (chooser.ShowDialog(this) != DialogResult.OK) return;
             try
             {
-                recorder = new RawFrameRecorder(bounds.Value, chooser.SelectedPath);
+                zipDestination = chooser.FileName;
+                recorder = new RawFrameRecorder(bounds.Value, Path.Combine(Path.GetTempPath(), "ScrollPDF-" + Guid.NewGuid().ToString("N")));
                 await recorder.StartAsync();
                 start.Enabled = region.Enabled = rawOnly.Enabled = false;
                 stop.Enabled = true; activity.Visible = true;
@@ -170,18 +172,18 @@ public sealed class MainForm : Form
                 status.Text = "Packing and verifying screenshots in background...";
                 zipPercent = 0;
                 var progress = new Progress<int>(p => zipPercent = p);
-                string zip = await FrameArchive.PackageAsync(r.Folder, progress);
+                string zip = await FrameArchive.PackageAsync(r.Folder, zipDestination!, progress);
                 zipPercent = 100;
-                status.Text = $"Saved {r.Saved:N0} screenshots to {zip}. Original PNG files retained.";
+                status.Text = $"Saved {r.Saved:N0} screenshots to {zip}. Temporary staging folder removed.";
             }
             catch (Exception ex)
             {
-                status.Text = "Archive failed: " + ex.Message;
+                status.Text = "Archive failed: " + ex.Message + "  Recovery folder: " + r.Folder;
                 MessageBox.Show(ex.Message, "Archive failed");
             }
             finally
             {
-                recorder = null; finishing = false;
+                recorder = null; zipDestination = null; finishing = false;
                 zipPercent = -1;
                 queueBar.Maximum = RawFrameRecorder.QueueCapacity;
                 queueBar.Value = 0;
