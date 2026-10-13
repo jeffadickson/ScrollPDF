@@ -1,8 +1,10 @@
 # ScrollPDF
 
-Windows .NET 8 scrolling capture utility with a staged capture, analysis and PDF writer pipeline.
+Windows desktop tool for capturing long documents while scrolling, recognizing visible page boundaries, and saving a multi-page PDF.
 
-## Build
+## Build and run
+
+Requires Windows 10/11 and .NET 8 SDK.
 
 ```powershell
 dotnet restore ScrollPDF.sln
@@ -11,8 +13,26 @@ dotnet test ScrollPDF.sln -c Release
 dotnet run --project ScrollPDF/ScrollPDF.csproj
 ```
 
-Select capture region, start, scroll slowly down, stop to save a multipage PDF.
+Choose **Select capture region**, drag over the scrolling document, press **Start**, scroll **slowly downward**, then **Stop**.
 
-The document-boundary detector recognizes gray viewer gutters between white pages, as illustrated by the IPC example. The image is a regression fixture; copyrighted content is not MIT licensed.
+## Architecture
 
-MIT licensed project code. See docs for limitations.
+- UI: Windows Forms
+- Capture worker: Windows GDI capture at ~5.7 frames/sec
+- Analysis worker: displacement estimation and new-strip extraction
+- PDF worker: boundary detection, pagination, PDFsharp-GDI output
+- Bounded channels: 4 frames, 12 strips; backpressure instead of dropped queues
+
+The PDF document has one writer. The GDI+ API is Windows-only.
+
+## Boundary detection
+
+Gray viewer gutter between white document pages. The IPC screenshot fixture is covered by `IpcDocumentBoundary_is_detected`. Further screenshots can be regression fixtures.
+
+## Limitations
+
+Slow downward scrolling with overlap is required. Cross-strip page breaks are not yet detected by a rolling window, and abrupt scroll jumps are not recoverable. PDF pages contain raster images rather than searchable text. Thread-failure propagation needs hardening. Windows CI runs builds and tests.
+
+## License
+
+MIT for project code. Copyrighted third-party fixture images remain subject to their own rights.
