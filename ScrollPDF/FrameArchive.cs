@@ -23,7 +23,7 @@ public static class FrameArchive
         using(var zip = ZipFile.Open(staging, ZipArchiveMode.Create))
         {
             foreach(var path in paths)
-                zip.CreateEntryFromFile(path,Path.GetFileName(path),CompressionLevel.Optimal);
+                zip.CreateEntryFromFile(path,Path.GetFileName(path),CompressionLevel.Fastest);
         }
         using(var zip = ZipFile.OpenRead(staging))
         {
