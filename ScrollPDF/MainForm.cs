@@ -13,9 +13,9 @@ public sealed class MainForm : Form
         Font = new Font("Consolas",10), Text = "Frames: 0   Analyzed: 0   Saved: 0" };
     private readonly ProgressBar activity = new() { Dock = DockStyle.Top, Height = 18, Style = ProgressBarStyle.Marquee, Visible = false };
     private readonly ProgressBar queueBar = new() { Dock = DockStyle.Top, Height = 23, Minimum = 0,
-        Maximum = RawFrameRecorder.QueueCapacity, Style = ProgressBarStyle.Continuous };
+        Maximum = 100, Style = ProgressBarStyle.Continuous };
     private readonly Label queueLabel = new() { Dock = DockStyle.Top, Height = 22,
-        Text = "PNG writer queue: 0 / 16 frames (0%)" };
+        Text = "PNG writer queue: 0 frames" };
     private readonly System.Windows.Forms.Timer refresh = new() { Interval = 250 };
     private Rectangle? bounds;
     private CapturePipeline? pipeline;
@@ -68,12 +68,12 @@ public sealed class MainForm : Form
         }
         if (recorder is { } r)
         {
-            queueBar.Maximum = RawFrameRecorder.QueueCapacity;
+            queueBar.Maximum = r.QueueCapacity;
             int queued = r.QueueSize;
             queueBar.Value = Math.Clamp(queued, queueBar.Minimum, queueBar.Maximum);
-            queueLabel.Text = $"PNG writer queue: {queued} / {RawFrameRecorder.QueueCapacity} frames ({queued * 100 / RawFrameRecorder.QueueCapacity}%)";
+            queueLabel.Text = $"PNG writer queue: {queued} / {r.QueueCapacity} frames ({queued * 100 / r.QueueCapacity}%)";
             counters.Text = $"Captured: {r.Captured:N0}     PNG saved: {r.Saved:N0}     Waiting/in flight: {r.Captured-r.Saved:N0}\n" +
-                $"Capture rate: {r.ActualFps:F1} FPS (target {RawFrameRecorder.TargetFps})";
+                $"Capture rate: {r.ActualFps:F1} FPS (target {RawFrameRecorder.TargetFps})   Worst gap: {r.MaximumGapMilliseconds} ms   Queue waits: {r.BackpressureEvents}";
             if (r.Finished && !finishing) status.Text = "Recording ended. Check image folder.";
             return;
         }
@@ -186,7 +186,7 @@ public sealed class MainForm : Form
             {
                 recorder = null; zipDestination = null; finishing = false;
                 zipPercent = -1;
-                queueBar.Maximum = RawFrameRecorder.QueueCapacity;
+                queueBar.Maximum = 100;
                 queueBar.Value = 0;
                 activity.Visible = false;
                 start.Enabled = region.Enabled = rawOnly.Enabled = true;
