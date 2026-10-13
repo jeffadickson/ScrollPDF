@@ -8,6 +8,7 @@ public sealed class MainForm : Form
     private readonly CheckBox rawOnly = new() { Text = "Save raw PNG frames only", Checked = true, AutoSize = true };
     private readonly CheckBox videoOnly = new() { Text = "Experimental video recording (30 FPS, lossless)", AutoSize = true };
     private VideoRecorder? videoRecorder;
+    private readonly Button processRecording = new() { Text = "Process Recording", Width = 170 };
     private readonly Button start = new() { Text = "Start", Width = 90 };
     private readonly Button stop = new() { Text = "Stop and save", Width = 110, Enabled = false };
     private readonly Label status = new() { Text = "Select a region and start scrolling.", AutoSize = false, Height = 28, Dock = DockStyle.Top };
@@ -66,7 +67,7 @@ public sealed class MainForm : Form
         stop.BackColor = Color.FromArgb(125, 70, 65);
 
         var controls = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, WrapContents = false };
-        controls.Controls.AddRange([region, start, stop]);
+        controls.Controls.AddRange([region, start, stop, processRecording]);
 
         rawOnly.ForeColor = TextColor; rawOnly.Dock = DockStyle.Top;
         rawOnly.Height = 29;
@@ -118,6 +119,7 @@ public sealed class MainForm : Form
         };
         start.Click += async (_,_) => await BeginCapture();
         stop.Click += async (_,_) => await EndCapture();
+        processRecording.Click += async (_,_) => await ProcessRecordingAsync();
         FormClosing += (_,e) => {
             if (pipeline is not null || recorder is not null || videoRecorder is not null)
             {
@@ -255,6 +257,63 @@ public sealed class MainForm : Form
             if (ReferenceEquals(pipeline, stopped)) pipeline = null;
             start.Enabled = region.Enabled = true;
             handlingUnexpectedStop = false;
+        }
+    }
+
+    private async Task ProcessRecordingAsync()
+    {
+        if (pipeline is not null || recorder is not null || videoRecorder is not null) return;
+        using var selected = new OpenFileDialog {
+            Filter="Video recordings (*.mkv;*.mp4)|*.mkv;*.mp4",
+            Title="Select a recorded video to reconstruct"
+        };
+        if (selected.ShowDialog(this)!=DialogResult.OK) return;
+        using var destination = new FolderBrowserDialog {
+            Description="Select output folder for the reconstructed PDF and diagnostics"
+        };
+        if (destination.ShowDialog(this)!=DialogResult.OK) return;
+        var script = Path.Combine(AppContext.BaseDirectory,"tools","recover_video_pdf.py");
+        if (!File.Exists(script))
+        {
+            script = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory,"..","..","..","..","tools","recover_video_pdf.py"));
+        }
+        if (!File.Exists(script))
+        {
+            MessageBox.Show(this,"Offline stitcher not found. Run from the source repository or copy tools/recover_video_pdf.py into the application tools directory.");
+            return;
+        }
+        processRecording.Enabled=false; start.Enabled=false; region.Enabled=false;
+        activity.Visible=true; status.Text="Reconstructing PDF from video...";
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("py") {
+                UseShellExecute=false, CreateNoWindow=true,
+                RedirectStandardOutput=true, RedirectStandardError=true
+            };
+            psi.ArgumentList.Add("-3");
+            psi.ArgumentList.Add(script);
+            psi.ArgumentList.Add(selected.FileName);
+            psi.ArgumentList.Add("--output");
+            psi.ArgumentList.Add(destination.SelectedPath);
+            using var process = new System.Diagnostics.Process { StartInfo=psi };
+            if (!process.Start()) throw new IOException("Could not launch Python");
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            string output = await stdout, errors = await stderr;
+            if(process.ExitCode != 0) throw new IOException(errors + Environment.NewLine + output);
+            status.Text="Reconstruction completed: " + Path.Combine(destination.SelectedPath,"reconstructed.pdf");
+            MessageBox.Show(this,status.Text + Environment.NewLine + output,"ScrollPDF recovery complete");
+        }
+        catch(Exception ex)
+        {
+            status.Text="Recovery failed: " + ex.GetBaseException().Message;
+            MessageBox.Show(this,ex.Message,"Recovery error");
+        }
+        finally
+        {
+            processRecording.Enabled=true;start.Enabled=true;region.Enabled=true;
+            activity.Visible=false;
         }
     }
 
