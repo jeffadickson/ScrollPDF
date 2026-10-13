@@ -18,6 +18,12 @@ public sealed class CapturePipeline
     private readonly Channel<Bitmap> strips = Channel.CreateBounded<Bitmap>(
         new BoundedChannelOptions(12) {SingleReader=true,SingleWriter=true,FullMode=BoundedChannelFullMode.Wait});
     private Task? work;
+    private string? failureMessage;
+    public string? FailureMessage => Volatile.Read(ref failureMessage);
+    public bool IsFinished => work?.IsCompleted ?? false;
+    public bool IsFaulted => work?.IsFaulted ?? false;
+    public Task Completion => work ?? Task.CompletedTask;
+
     public long CapturedFrames => Interlocked.Read(ref captured);
     public long AnalyzedFrames => Interlocked.Read(ref analyzed);
     public long ArchivedFrames => Interlocked.Read(ref archived);
@@ -46,6 +52,9 @@ public sealed class CapturePipeline
             _=task.ContinueWith(t =>
             {
                 if (!t.IsFaulted) return;
+                var message = t.Exception?.GetBaseException().Message ?? "Unknown worker failure";
+                Volatile.Write(ref failureMessage, message);
+                try { status("CAPTURE FAILED: " + message); } catch { /* UI may be closing */ }
                 failed.Cancel();captureStop.Cancel();
                 frames.Writer.TryComplete(t.Exception);
                 raw.Writer.TryComplete(t.Exception);
@@ -134,15 +143,15 @@ public sealed class CapturePipeline
 
     private async Task WriteAsync()
     {
-        using var document=new PdfPageWriter(output,region.Width);
-        await foreach(var strip in strips.Reader.ReadAllAsync(failed.Token))
-            {
-                using(strip) document.Append(strip);
-                Volatile.Write(ref pagesWritten, document.PagesWritten);
-            }
+        using var document = new PdfPageWriter(output, region.Width);
+        await foreach (var strip in strips.Reader.ReadAllAsync(failed.Token))
+        {
+            using (strip) document.Append(strip);
+            Volatile.Write(ref pagesWritten, document.PagesWritten);
+        }
         status("Finalizing PDF...");
         document.Finish();
-        Volatile.Write(ref pagesWritten,document.PagesWritten);
+        Volatile.Write(ref pagesWritten, document.PagesWritten);
     }
 
     public async Task StopAsync()
