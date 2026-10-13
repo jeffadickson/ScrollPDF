@@ -95,17 +95,25 @@ public static class Geometry
             int remaining = h - delta;
             if (remaining < h * .30) return double.PositiveInfinity;
             double total = 0, weights = 0;
-            for (int y = 3; y < remaining - 3; y += 3)
+            // Every row is essential: periodic chart/grid lines alias if we
+            // examine every third row. Also inspect gradients on BOTH images,
+            // otherwise blank pixels can score as a false perfect match.
+            for (int y = 2; y < remaining - 2; y++)
                 for (int x = 2; x < columns - 2; x += 2)
                 {
                     int sourceY = y + delta;
-                    int gradient = Math.Max(
+                    int oldValue = a[sourceY, x], newValue = b[y, x];
+                    int oldGradient = Math.Max(
                         Math.Abs(a[sourceY - 1, x] - a[sourceY + 1, x]),
                         Math.Abs(a[sourceY, x - 1] - a[sourceY, x + 1]));
-                    // Flat white portions do not help establish a unique scroll.
-                    if (gradient < 6) continue;
-                    double weight = Math.Min(gradient, 64);
-                    total += weight * Math.Abs(a[sourceY, x] - b[y, x]);
+                    int newGradient = Math.Max(
+                        Math.Abs(b[y - 1, x] - b[y + 1, x]),
+                        Math.Abs(b[y, x - 1] - b[y, x + 1]));
+                    int strength = Math.Max(oldGradient, newGradient);
+                    if (strength < 6) continue;
+                    double weight = Math.Min(strength, 64);
+                    total += weight * (Math.Abs(oldValue - newValue) +
+                                      Math.Abs(oldGradient - newGradient));
                     weights += weight;
                 }
             return weights < 150 ? double.PositiveInfinity : total / weights;
