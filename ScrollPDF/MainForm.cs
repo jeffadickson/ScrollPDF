@@ -6,6 +6,8 @@ public sealed class MainForm : Form
 {
     private readonly Button region = new() { Text = "Select capture region", Width = 175 };
     private readonly CheckBox rawOnly = new() { Text = "Save raw PNG frames only", Checked = true, AutoSize = true };
+    private readonly CheckBox videoOnly = new() { Text = "Experimental video recording (30 FPS, lossless)", AutoSize = true };
+    private VideoRecorder? videoRecorder;
     private readonly Button start = new() { Text = "Start", Width = 90 };
     private readonly Button stop = new() { Text = "Stop and save", Width = 110, Enabled = false };
     private readonly Label status = new() { Text = "Select a region and start scrolling.", AutoSize = false, Height = 28, Dock = DockStyle.Top };
@@ -95,12 +97,15 @@ public sealed class MainForm : Form
         stack.Controls.Add(Section("STATUS", status, 68));
         stack.Controls.Add(Section("PNG WRITER QUEUE", queueBody, 94));
         stack.Controls.Add(Section("CAPTURE METRICS", counters, 109));
+        stack.Controls.Add(videoOnly);
         stack.Controls.Add(rawOnly);
         stack.Controls.Add(controls);
         stack.Controls.Add(subtitle);
         stack.Controls.Add(heading);
         stack.Controls.Add(activity);
 
+        videoOnly.CheckedChanged += (_,_) => { if (videoOnly.Checked) rawOnly.Checked = false; };
+        rawOnly.CheckedChanged += (_,_) => { if (rawOnly.Checked) videoOnly.Checked = false; };
         refresh.Tick += (_,_) => RefreshCounters();
         refresh.Start();
         region.Click += (_,_) => {
@@ -114,7 +119,7 @@ public sealed class MainForm : Form
         start.Click += async (_,_) => await BeginCapture();
         stop.Click += async (_,_) => await EndCapture();
         FormClosing += (_,e) => {
-            if (pipeline is not null || recorder is not null)
+            if (pipeline is not null || recorder is not null || videoRecorder is not null)
             {
                 e.Cancel = true;
                 status.Text = "Stop and save before closing.";
@@ -125,6 +130,14 @@ public sealed class MainForm : Form
     private void RefreshCounters()
     {
         var p = pipeline;
+        if (videoRecorder is { } video)
+        {
+            counters.Text = $"Lossless RGB video     30 FPS target\\nElapsed: {video.Seconds:F1} s   Recording: {video.Running}";
+            queueLabel.Text = "Video encoder: FFmpeg (independent process)";
+            queueBar.Value = 0;
+            if (!video.Running && !finishing) status.Text = "Video process ended; stop and inspect the MKV.";
+            return;
+        }
         if (zipPercent >= 0)
         {
             queueBar.Maximum = 100;
@@ -163,6 +176,22 @@ public sealed class MainForm : Form
     private async Task BeginCapture()
     {
         if (bounds is null) { MessageBox.Show("Select a screen region first."); return; }
+        if (videoOnly.Checked)
+        {
+            using var chooser = new SaveFileDialog { Filter = "Matroska video (*.mkv)|*.mkv",
+                DefaultExt = "mkv", FileName = $"ScrollPDF-{DateTime.Now:yyyyMMdd-HHmmss}.mkv" };
+            if (chooser.ShowDialog(this) != DialogResult.OK) return;
+            try
+            {
+                videoRecorder = new VideoRecorder(bounds.Value,chooser.FileName);
+                await videoRecorder.StartAsync();
+                start.Enabled = region.Enabled = rawOnly.Enabled = videoOnly.Enabled = false;
+                stop.Enabled = true; activity.Visible = true;
+                status.Text = "Recording lossless video; scroll through the document.";
+            }
+            catch(Exception ex) { videoRecorder=null; MessageBox.Show(this,ex.Message,"Video capture error"); }
+            return;
+        }
         if (rawOnly.Checked)
         {
             using var chooser = new SaveFileDialog { Filter="ZIP archive (*.zip)|*.zip", DefaultExt="zip", FileName=$"ScrollPDF-{DateTime.Now:yyyyMMdd-HHmmss}.zip" };
@@ -231,6 +260,27 @@ public sealed class MainForm : Form
 
     private async Task EndCapture()
     {
+        if (videoRecorder is { } video)
+        {
+            stop.Enabled = false; finishing = true;
+            try
+            {
+                status.Text = "Finalizing lossless MKV...";
+                await video.StopAsync();
+                status.Text = "Saved lossless capture: " + video.Output;
+            }
+            catch(Exception ex)
+            {
+                status.Text = "Video capture failed: " + ex.Message;
+                MessageBox.Show(this,ex.Message,"Video capture error");
+            }
+            finally
+            {
+                videoRecorder = null; finishing = false; activity.Visible = false;
+                start.Enabled = region.Enabled = rawOnly.Enabled = videoOnly.Enabled = true;
+            }
+            return;
+        }
         if (recorder is { } r)
         {
             stop.Enabled = false; finishing = true;
@@ -256,7 +306,7 @@ public sealed class MainForm : Form
                 queueBar.Maximum = 100;
                 queueBar.Value = 0;
                 activity.Visible = false;
-                start.Enabled = region.Enabled = rawOnly.Enabled = true;
+                start.Enabled = region.Enabled = rawOnly.Enabled = videoOnly.Enabled = true;
             }
             return;
         }
