@@ -30,16 +30,38 @@ def reconstruct(video,output):
     ok,prev=inp.read()
     if not ok:raise ValueError('No decodable video frames')
     h,w=prev.shape[:2];last=features(prev)
-    strips=[prev.copy()];log=[];frame=1
+    positions=[0];log=[];frame=1
     while True:
         ok,cur=inp.read()
         if not ok:break
         ft=features(cur);offset,score,state=align(last,ft)
-        if state=='matched' and 0<offset<h:strips.append(cur[-offset:].copy())
+        positions.append(positions[-1]+(offset if state=='matched' and 0<offset<h else 0))
         log.append({'frame':frame,'shift_pixels':offset,'confidence':round(score,4),'status':state})
         last=ft;frame+=1
     inp.release()
-    allrows=np.concatenate(strips,axis=0);length=len(allrows)
+    # Second pass: choose each output row from a frame displaying that row near
+    # the CENTER of the viewport. The old bottom-strip strategy used freshly
+    # exposed PDF tiles, which can be incompletely rendered for several frames.
+    length=positions[-1]+h
+    allrows=np.zeros((length,w,3),dtype=np.uint8)
+    quality=np.full(length,-1e9,dtype=np.float32)
+    replay=cv2.VideoCapture(str(video))
+    for index,top in enumerate(positions):
+        ok,cur=replay.read()
+        if not ok:raise IOError(f"Replay stopped early at frame {index}")
+        y=np.arange(h)
+        rank=-np.abs(y-h//2).astype(np.float32)
+        if 0<index<len(positions)-1 and positions[index]==positions[index+1]:
+            rank+=15
+        if index>0 and positions[index]==positions[index-1]:
+            rank+=5
+        rank[:30]-=150
+        rank[-30:]-=150
+        previous=quality[top:top+h]
+        select=rank>previous
+        previous[select]=rank[select]
+        allrows[top:top+h][select]=cur[select]
+    replay.release()
     # Candidate gray gutters; repeated page spacing disambiguates internal rules.
     row=allrows[:,40:w-45:12,:].mean(axis=(1,2))
     mask=(row>226)&(row<250);runs=[];begin=None
@@ -71,7 +93,7 @@ def reconstruct(video,output):
         pdf.drawImage(ImageReader(im),0,841.8-scaled,width=595.2,height=scaled)
         pdf.showPage()
     pdf.save()
-    report={'video_frames':frame,'pages':len(bounds)-1,'page_heights':np.diff(bounds).tolist(),
+    report={'reconstruction':'stable-centered-frame-row-selection', 'video_frames':frame,'pages':len(bounds)-1,'page_heights':np.diff(bounds).tolist(),
             'uncertain_frames':[d['frame'] for d in log if d['status']=='uncertain'],
             'alignments':log}
     (output/'diagnostics.json').write_text(json.dumps(report,indent=2))
