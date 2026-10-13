@@ -16,6 +16,7 @@ public sealed class RawFrameRecorder
     public int QueueCapacity { get; }
     public long MaximumGapMilliseconds => Interlocked.Read(ref maxGapMs);
     private long maxGapMs, previousCaptureTicks;
+    private long previousWrittenTicks;
     private long backpressureEvents;
     public long BackpressureEvents => Interlocked.Read(ref backpressureEvents);
     private Task? running;
@@ -117,10 +118,14 @@ public sealed class RawFrameRecorder
         await foreach(var item in channel.Reader.ReadAllAsync())
             using(item.Frame)
             {
-                var path = Path.Combine(folder,$"frame-{item.Id:D7}.png");
-                item.Frame.Save(path,ImageFormat.Png);
+                var path = Path.Combine(folder,$"frame-{item.Id:D7}.bmp");
+                item.Frame.Save(path,ImageFormat.Bmp);
+                long prior = previousWrittenTicks;
+                previousWrittenTicks = item.Ticks;
+                string gap = prior == 0 ? "" :
+                    ((item.Ticks - prior) * 1000.0 / Stopwatch.Frequency).ToString("F3",System.Globalization.CultureInfo.InvariantCulture);
                 File.AppendAllText(Path.Combine(folder,"frames.csv"),
-                    $"{item.Id},{item.Utc:O},{item.Ticks},,{Path.GetFileName(path)}"+Environment.NewLine);
+                    $"{item.Id},{item.Utc:O},{item.Ticks},{gap},{Path.GetFileName(path)}"+Environment.NewLine);
                 Interlocked.Increment(ref saved);
             }
     }
