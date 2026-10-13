@@ -68,76 +68,84 @@ public static class Geometry
     {
         int w = Math.Min(previous.Width, current.Width);
         int h = Math.Min(previous.Height, current.Height);
-        int maxShift = Math.Min(Math.Max(0, maximumShift), (int)(h * .70));
-        if (w < 80 || h < 100 || maxShift < 3)
+        int maximum = Math.Min(Math.Max(0, maximumShift), (int)(h * .70));
+        if (w < 80 || h < 100 || maximum < 3)
             return new(0, double.PositiveInfinity, 0, "Capture region too small");
 
-        // Sample only the central content region, avoiding fixed toolbars and scrollbars.
-        // Use a deterministic rectangular grid rather than per-candidate GetPixel calls.
-        const int nx = 56;
-        int stepY = Math.Max(2, h / 180);
-        int ny = (h + stepY - 1) / stepY;
-        byte[,] a = new byte[ny, nx], b = new byte[ny, nx];
-        int[] xs = new int[nx];
-        for (int x = 0; x < nx; x++)
-            xs[x] = w / 10 + x * (w * 8 / 10 - 1) / (nx - 1);
-        for (int y = 0; y < ny; y++)
+        // Preserve EVERY vertical row. Previously the 2-3px vertical decimation
+        // rounded candidate offsets and made fine chart grids alias together.
+        // Sample central columns to exclude PDF viewer scrollbars and toolbars.
+        const int columns = 64;
+        var a = new byte[h, columns];
+        var b = new byte[h, columns];
+        for (int x = 0; x < columns; x++)
         {
-            int yy = Math.Min(h - 1, y * stepY);
-            for (int x = 0; x < nx; x++)
+            int xx = w / 10 + x * (w * 8 / 10 - 1) / (columns - 1);
+            for (int y = 0; y < h; y++)
             {
-                var p = previous.GetPixel(xs[x], yy);
-                var q = current.GetPixel(xs[x], yy);
-                a[y, x] = (byte)((p.R * 77 + p.G * 150 + p.B * 29) >> 8);
-                b[y, x] = (byte)((q.R * 77 + q.G * 150 + q.B * 29) >> 8);
+                Color pa = previous.GetPixel(xx, y);
+                Color pb = current.GetPixel(xx, y);
+                a[y, x] = (byte)((pa.R * 77 + pa.G * 150 + pa.B * 29) >> 8);
+                b[y, x] = (byte)((pb.R * 77 + pb.G * 150 + pb.B * 29) >> 8);
             }
         }
 
-        // Compare the overlap of old frame shifted up against the new frame.
-        // Scoring uses differences weighted toward informative (non-flat) regions.
         double Score(int delta)
         {
-            int offset = (int)Math.Round((double)delta / stepY);
-            int stop = ny - offset - 3;
-            if (stop < ny / 4) return double.PositiveInfinity;
-            double error = 0, weight = 0;
-            for (int y = 2; y < stop; y += 2)
-                for (int x = 2; x < nx - 2; x += 2)
+            int remaining = h - delta;
+            if (remaining < h * .30) return double.PositiveInfinity;
+            double total = 0, weights = 0;
+            for (int y = 3; y < remaining - 3; y += 3)
+                for (int x = 2; x < columns - 2; x += 2)
                 {
-                    int v = a[y + offset, x], t = b[y, x];
-                    int tex = Math.Max(Math.Abs(a[y + offset, x + 1] - a[y + offset, x - 1]),
-                                       Math.Abs(a[y + offset + 1, x] - a[y + offset - 1, x]));
-                    if (tex < 8) continue;
-                    double wt = Math.Min(48, tex);
-                    error += wt * Math.Abs(v - t);
-                    weight += wt;
+                    int sourceY = y + delta;
+                    int gradient = Math.Max(
+                        Math.Abs(a[sourceY - 1, x] - a[sourceY + 1, x]),
+                        Math.Abs(a[sourceY, x - 1] - a[sourceY, x + 1]));
+                    // Flat white portions do not help establish a unique scroll.
+                    if (gradient < 6) continue;
+                    double weight = Math.Min(gradient, 64);
+                    total += weight * Math.Abs(a[sourceY, x] - b[y, x]);
+                    weights += weight;
                 }
-            return weight < 500 ? double.PositiveInfinity : error / weight;
+            return weights < 150 ? double.PositiveInfinity : total / weights;
         }
 
-        int bestShift = 0;
+        // Exhaustive pixel-accurate search. Sampling already makes this cheap
+        // at ordinary capture region dimensions. It avoids missing narrow
+        // peaks in periodic charts during a coarse-to-fine candidate search.
         double best = double.PositiveInfinity;
-        for (int shift = 0; shift <= maxShift; shift += stepY * 3)
+        int bestShift = 0;
+        double[] scores = new double[maximum + 1];
+        for (int delta = 0; delta <= maximum; delta++)
         {
-            double score = Score(shift);
-            if (score < best) { best = score; bestShift = shift; }
-        }
-        int rough = bestShift;
-        for (int shift = Math.Max(0, rough - stepY * 4);
-             shift <= Math.Min(maxShift, rough + stepY * 4); shift += stepY)
-        {
-            double score = Score(shift);
-            if (score < best) { best = score; bestShift = shift; }
+            double score = Score(delta);
+            scores[delta] = score;
+            if (score < best) { best = score; bestShift = delta; }
         }
         if (double.IsInfinity(best))
             return new(0, best, 0, "Insufficient textured overlap");
-        // A small difference to the static frame is a genuine stationary capture.
-        double still = Score(0);
-        if (bestShift < stepY * 2 || still <= best + 1)
+
+        double still = scores[0];
+        // A frame that matches with no displacement is a stationary frame.
+        if (bestShift <= 1 && still <= 2)
             return new(0, best, 1, "No measurable scroll");
-        // A poor match must not generate invented missing/duplicated document content.
-        double confidence = Math.Clamp((still - best) / Math.Max(1, still), 0, 1);
-        if (best > 19 || confidence < .35)
+
+        // Repeated grid lines can yield several plausible offsets. Require a
+        // clear advantage over any competing shift outside the local ±2px peak.
+        double second = double.PositiveInfinity;
+        for (int i = 0; i < scores.Length; i++)
+            if (Math.Abs(i - bestShift) > 2 && scores[i] < second) second = scores[i];
+
+        double advantage = double.IsPositiveInfinity(second) ? 1 :
+            Math.Clamp((second - best) / Math.Max(1, second), 0, 1);
+        double improvement = double.IsPositiveInfinity(still) ? 1 :
+            Math.Clamp((still - best) / Math.Max(1, still), 0, 1);
+        double confidence = Math.Min(advantage, improvement);
+
+        if (bestShift <= 1 && still <= best + 1)
+            return new(0, best, 1, "No measurable scroll");
+        if (bestShift < 2 || best > 18 || confidence < .20)
             return new(0, best, confidence, "Ambiguous frame overlap");
         return new(bestShift, best, confidence, "Matched");
     }
