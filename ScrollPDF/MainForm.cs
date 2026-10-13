@@ -24,21 +24,83 @@ public sealed class MainForm : Form
     private bool finishing;
     private int zipPercent = -1;
     private bool handlingUnexpectedStop;
+    private static readonly Color BackgroundColor = Color.FromArgb(16, 23, 35);
+    private static readonly Color SurfaceColor = Color.FromArgb(29, 40, 56);
+    private static readonly Color TextColor = Color.FromArgb(234, 240, 248);
+    private static readonly Color MutedColor = Color.FromArgb(157, 175, 194);
+    private static readonly Color AccentColor = Color.FromArgb(64, 178, 225);
+
+    private static Panel Section(string title, Control content, int height)
+    {
+        var panel = new Panel { Dock = DockStyle.Top, Height = height, BackColor = SurfaceColor, Padding = new Padding(16, 10, 16, 10) };
+        var heading = new Label { Text = title, Dock = DockStyle.Top, Height = 27,
+            ForeColor = MutedColor, Font = new Font("Segoe UI Semibold", 10f) };
+        panel.Controls.Add(content);
+        panel.Controls.Add(heading);
+        return panel;
+    }
+
     public MainForm()
     {
-        Text = "ScrollPDF – capture monitor";
-        Width = 680; Height = 365; MinimumSize = new Size(610,330);
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 52, Padding = new Padding(8) };
-        bar.Controls.AddRange([region,start,stop]);
-        var mode = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 32 };
-        mode.Controls.Add(rawOnly);
-        Controls.Add(counters);
-        Controls.Add(queueBar);
-        Controls.Add(queueLabel);
-        Controls.Add(mode);
-        Controls.Add(activity);
-        Controls.Add(status);
-        Controls.Add(bar);
+        Text = "ScrollPDF  |  Capture Studio";
+        Width = 790; Height = 530; MinimumSize = new Size(710, 490);
+        StartPosition = FormStartPosition.CenterScreen;
+        BackColor = BackgroundColor; ForeColor = TextColor;
+        Font = new Font("Segoe UI", 10f);
+
+        var heading = new Label { Text = "ScrollPDF", Font = new Font("Segoe UI Semibold", 23f),
+            Dock = DockStyle.Top, Height = 55, ForeColor = TextColor };
+        var subtitle = new Label { Text = "Lossless scrolling capture  ·  Adaptive PNG recording",
+            Dock = DockStyle.Top, Height = 30, ForeColor = MutedColor };
+
+        foreach (var button in new[] { region, start, stop })
+        {
+            button.Height = 36; button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 0;
+            button.BackColor = SurfaceColor; button.ForeColor = TextColor;
+            button.Margin = new Padding(0, 0, 10, 0);
+        }
+        start.BackColor = Color.FromArgb(25, 113, 151);
+        stop.BackColor = Color.FromArgb(125, 70, 65);
+
+        var controls = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 46, WrapContents = false };
+        controls.Controls.AddRange([region, start, stop]);
+
+        rawOnly.ForeColor = TextColor; rawOnly.Dock = DockStyle.Top;
+        rawOnly.Height = 29;
+        status.Dock = DockStyle.Fill; status.ForeColor = TextColor;
+        status.Font = new Font("Segoe UI", 10f);
+        status.AutoEllipsis = true;
+        counters.Dock = DockStyle.Fill;
+        counters.ForeColor = TextColor;
+        counters.Font = new Font("Consolas", 11f);
+        counters.TextAlign = ContentAlignment.MiddleLeft;
+
+        queueLabel.ForeColor = MutedColor;
+        queueLabel.Height = 27; queueLabel.Dock = DockStyle.Top;
+        queueBar.Dock = DockStyle.Top; queueBar.Height = 25;
+        queueBar.Style = ProgressBarStyle.Continuous;
+
+        var queueBody = new Panel { Dock = DockStyle.Fill };
+        queueBody.Controls.Add(queueBar);
+        queueBody.Controls.Add(queueLabel);
+        activity.Dock = DockStyle.Bottom; activity.Height = 10;
+
+        var content = new Panel { Dock = DockStyle.Fill, Padding = new Padding(20, 15, 20, 15) };
+        Controls.Add(content);
+        var stack = new Panel { Dock = DockStyle.Top, Height = 450 };
+        content.Controls.Add(stack);
+
+        // DockStyle.Top controls are stacked in reverse insertion order.
+        stack.Controls.Add(Section("STATUS", status, 68));
+        stack.Controls.Add(Section("PNG WRITER QUEUE", queueBody, 94));
+        stack.Controls.Add(Section("CAPTURE METRICS", counters, 109));
+        stack.Controls.Add(rawOnly);
+        stack.Controls.Add(controls);
+        stack.Controls.Add(subtitle);
+        stack.Controls.Add(heading);
+        stack.Controls.Add(activity);
+
         refresh.Tick += (_,_) => RefreshCounters();
         refresh.Start();
         region.Click += (_,_) => {
@@ -52,7 +114,11 @@ public sealed class MainForm : Form
         start.Click += async (_,_) => await BeginCapture();
         stop.Click += async (_,_) => await EndCapture();
         FormClosing += (_,e) => {
-            if (pipeline is not null || recorder is not null) { e.Cancel = true; status.Text = "Stop and save before closing."; }
+            if (pipeline is not null || recorder is not null)
+            {
+                e.Cancel = true;
+                status.Text = "Stop and save before closing.";
+            }
         };
     }
 
