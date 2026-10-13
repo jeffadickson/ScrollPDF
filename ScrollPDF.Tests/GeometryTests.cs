@@ -4,6 +4,19 @@ using Xunit;
 public class GeometryTests
 {
     [Fact]
+    public void VideoCaptureArgumentsKeepExactRegionAndLosslessCodec()
+    {
+        var args=VideoRecorder.CaptureArguments(new Rectangle(120,80,1008,702),"test.mkv",30);
+        Assert.Contains("-framerate 30",args);
+        Assert.Contains("-offset_x 120",args);
+        Assert.Contains("-offset_y 80",args);
+        Assert.Contains("-video_size 1008x702",args);
+        Assert.Contains("libx264rgb",args);
+        Assert.Contains("-qp 0",args);
+    }
+
+
+    [Fact]
     public void Default32BitBitmapIsAcceptedByPngEncoder()
     {
         using var bitmap = new Bitmap(30,22); // GDI+ default 32-bit ARGB
