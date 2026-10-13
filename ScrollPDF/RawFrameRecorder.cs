@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Threading.Channels;
@@ -16,6 +17,9 @@ public sealed class RawFrameRecorder
         { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
     private Task? running;
     private long captured, saved;
+    public const int TargetFps = 20;
+    public double ActualFps => Captured / Math.Max(.001, stopwatch.Elapsed.TotalSeconds);
+    private readonly Stopwatch stopwatch = new();
     public long Captured => Interlocked.Read(ref captured);
     public long Saved => Interlocked.Read(ref saved);
     public const int QueueCapacity = 16;
@@ -33,6 +37,7 @@ public sealed class RawFrameRecorder
             throw new IOException("Recording directory is not empty");
         Directory.CreateDirectory(folder);
         File.WriteAllText(Path.Combine(folder, "region.txt"), $"{area.X},{area.Y},{area.Width},{area.Height}");
+        stopwatch.Start();
         running = RunAsync();
         return Task.CompletedTask;
     }
@@ -52,6 +57,7 @@ public sealed class RawFrameRecorder
     private async Task CaptureAsync()
     {
         long n = 0;
+        long frameNumber = 0;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token,writerFailed.Token);
         var token = linked.Token;
         try
@@ -67,7 +73,10 @@ public sealed class RawFrameRecorder
                 }
                 catch { bmp.Dispose(); throw; }
                 n++; Interlocked.Increment(ref captured);
-                try { await Task.Delay(125, token); }
+                frameNumber++;
+                var nextFrame = TimeSpan.FromTicks(frameNumber * TimeSpan.TicksPerSecond / TargetFps);
+                var delay = nextFrame - stopwatch.Elapsed;
+                try { if (delay > TimeSpan.Zero) await Task.Delay(delay, token); }
                 catch(OperationCanceledException) when(token.IsCancellationRequested) { break; }
             }
         }
@@ -90,6 +99,7 @@ public sealed class RawFrameRecorder
     {
         stop.Cancel();
         if(running != null) await running;
+        stopwatch.Stop();
         stop.Dispose();
         writerFailed.Dispose();
     }
