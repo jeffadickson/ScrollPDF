@@ -3,6 +3,35 @@ using ScrollPDF;
 using Xunit;
 public class GeometryTests
 {
+    [Theory]
+    [InlineData(0, 100, System.IO.Compression.CompressionLevel.Optimal)]
+    [InlineData(29, 100, System.IO.Compression.CompressionLevel.Optimal)]
+    [InlineData(30, 100, System.IO.Compression.CompressionLevel.Fastest)]
+    [InlineData(69, 100, System.IO.Compression.CompressionLevel.Fastest)]
+    [InlineData(70, 100, System.IO.Compression.CompressionLevel.NoCompression)]
+    public void CompressionAdaptsToQueue(int depth,int capacity,System.IO.Compression.CompressionLevel expected)
+        => Assert.Equal(expected,AdaptivePng.LevelForOccupancy(depth,capacity));
+
+    [Theory]
+    [InlineData(System.IO.Compression.CompressionLevel.Optimal)]
+    [InlineData(System.IO.Compression.CompressionLevel.Fastest)]
+    [InlineData(System.IO.Compression.CompressionLevel.NoCompression)]
+    public void AdaptivePngRoundTripsPixels(System.IO.Compression.CompressionLevel level)
+    {
+        using var original=new Bitmap(48,37,System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+        for(int y=0;y<37;y++)
+            for(int x=0;x<48;x++)
+                original.SetPixel(x,y,Color.FromArgb(x*5%256,y*7%256,(x+y)*3%256));
+        using var data=new MemoryStream();
+        AdaptivePng.Write(original,data,level);
+        data.Position=0;
+        using var recovered=new Bitmap(data);
+        for(int y=0;y<37;y++)
+            for(int x=0;x<48;x++)
+                Assert.Equal(original.GetPixel(x,y).ToArgb(),recovered.GetPixel(x,y).ToArgb());
+    }
+
+
     [Fact]
     public void RawFrameZipPreservesFullSequenceAndVerifiesBytes()
     {
@@ -19,14 +48,14 @@ public class GeometryTests
                     graphics.Clear(Color.White);
                     graphics.FillRectangle(Brushes.Black,10,10+i*20,110,4);
                 }
-                frame.Save(Path.Combine(folder,$"frame-{i:D7}.bmp"),System.Drawing.Imaging.ImageFormat.Bmp);
+                AdaptivePng.Save(frame,Path.Combine(folder,$"frame-{i:D7}.png"),System.IO.Compression.CompressionLevel.Fastest);
             }
             string result = FrameArchive.PackageAsync(folder, zipPath).GetAwaiter().GetResult();
             Assert.Equal(zipPath,result);
             using var archive = System.IO.Compression.ZipFile.OpenRead(result);
             Assert.Equal(4,archive.Entries.Count);
-            Assert.Equal(new[] {"frame-0000000.bmp","frame-0000001.bmp",
-                "frame-0000002.bmp","frame-0000003.bmp"},
+            Assert.Equal(new[] {"frame-0000000.png","frame-0000001.png",
+                "frame-0000002.png","frame-0000003.png"},
                 archive.Entries.Select(e=>e.Name).OrderBy(n=>n).ToArray());
             Assert.False(Directory.Exists(folder));
         }
