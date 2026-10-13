@@ -72,7 +72,8 @@ public sealed class MainForm : Form
             int queued = r.QueueSize;
             queueBar.Value = Math.Clamp(queued, queueBar.Minimum, queueBar.Maximum);
             queueLabel.Text = $"PNG writer queue: {queued} / {RawFrameRecorder.QueueCapacity} frames ({queued * 100 / RawFrameRecorder.QueueCapacity}%)";
-            counters.Text = $"Captured: {r.Captured:N0}     PNG saved: {r.Saved:N0}     Waiting/in flight: {r.Captured-r.Saved:N0}";
+            counters.Text = $"Captured: {r.Captured:N0}     PNG saved: {r.Saved:N0}     Waiting/in flight: {r.Captured-r.Saved:N0}\n" +
+                $"Capture rate: {r.ActualFps:F1} FPS (target {RawFrameRecorder.TargetFps})";
             if (r.Finished && !finishing) status.Text = "Recording ended. Check image folder.";
             return;
         }
