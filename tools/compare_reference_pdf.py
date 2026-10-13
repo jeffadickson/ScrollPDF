@@ -17,7 +17,7 @@ def render(doc, index, width=650):
 def detect_defect_bands(reference, aligned, valid, threshold=32, minimum_rows=4):
     """Find concentrated horizontal disagreement; diagnostic, not proof of a seam."""
     difference=cv2.absdiff(reference,aligned)
-    informative=(reference<238)&valid
+    informative=((reference<238)|(aligned<238))&valid
     coverage=informative.sum(axis=1)
     row_error=np.divide(((difference>threshold)&informative).sum(axis=1),
                         coverage,out=np.zeros(len(coverage),dtype=float),
