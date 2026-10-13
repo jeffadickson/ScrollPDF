@@ -15,6 +15,7 @@ public sealed class MainForm : Form
     private Rectangle? bounds;
     private CapturePipeline? pipeline;
     private bool finishing;
+    private bool handlingUnexpectedStop;
     public MainForm()
     {
         Text = "ScrollPDF – capture monitor";
@@ -46,6 +47,11 @@ public sealed class MainForm : Form
     {
         var p = pipeline;
         if (p is null) return;
+        if (!finishing && !handlingUnexpectedStop && p.IsFinished)
+        {
+            handlingUnexpectedStop = true;
+            _ = HandleUnexpectedStopAsync(p);
+        }
         counters.Text =
             $"Captured: {p.CapturedFrames,7:N0}   Analyzed: {p.AnalyzedFrames,7:N0}   Archived: {p.ArchivedFrames,7:N0}\n" +
             $"PDF pages: {p.PagesWritten,5}   Last scroll: {p.LastDisplacement,5} px   Confidence: {p.LastConfidence,6:P0}\n" +
@@ -80,6 +86,33 @@ public sealed class MainForm : Form
         }
     }
 
+    private async Task HandleUnexpectedStopAsync(CapturePipeline stopped)
+    {
+        if (!ReferenceEquals(pipeline, stopped)) return;
+        stop.Enabled = false;
+        activity.Visible = false;
+        try
+        {
+            await stopped.Completion;
+            status.Text = "Capture ended unexpectedly. Check the saved PDF.";
+        }
+        catch (Exception ex)
+        {
+            var message = stopped.FailureMessage ?? ex.GetBaseException().Message;
+            status.Text = "Capture interrupted: " + message;
+            MessageBox.Show(this,
+                "ScrollPDF stopped because a worker failed.\n\n" + message +
+                "\n\nOriginal screenshots remain in:\n" + stopped.RawDirectory,
+                "ScrollPDF capture interrupted", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            if (ReferenceEquals(pipeline, stopped)) pipeline = null;
+            start.Enabled = region.Enabled = true;
+            handlingUnexpectedStop = false;
+        }
+    }
+
     private async Task EndCapture()
     {
         if (pipeline is null) return;
@@ -90,7 +123,13 @@ public sealed class MainForm : Form
             RefreshCounters();
             status.Text = $"Saved PDF ({pipeline.PagesWritten} pages). Raw frames: {pipeline.RawDirectory}";
         }
-        catch (Exception ex) { status.Text = "Capture failed: " + ex.Message; }
+        catch (Exception ex)
+        {
+            var message = pipeline?.FailureMessage ?? ex.GetBaseException().Message;
+            status.Text = "Capture failed: " + message;
+            MessageBox.Show(this, message + "\n\nRaw screenshots: " + pipeline?.RawDirectory,
+                "ScrollPDF capture error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         finally
         {
             finishing = false; pipeline = null;
