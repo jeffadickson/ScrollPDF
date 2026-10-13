@@ -6,15 +6,17 @@ namespace ScrollPDF;
 public static class FrameArchive
 {
     // Called after the capture worker and image writer have both finished.
-    public static Task<string> PackageAsync(string folder, IProgress<int>? progress = null)
-        => Task.Run(() => Package(folder, progress));
+    public static Task<string> PackageAsync(string folder, string output, IProgress<int>? progress = null)
+        => Task.Run(() => Package(folder, output, progress));
 
-    private static string Package(string folder, IProgress<int>? progress)
+    private static string Package(string folder, string output, IProgress<int>? progress)
     {
         var paths = Directory.GetFiles(folder, "frame-*.png")
+            .Concat(new[] { "region.txt", "completed.txt" }.Select(n => Path.Combine(folder,n)).Where(File.Exists))
             .OrderBy(p => p, StringComparer.Ordinal).ToArray();
         if(paths.Length == 0) throw new InvalidDataException("No screenshot frames");
-        var output = Path.TrimEndingDirectorySeparator(folder) + ".zip";
+        output = Path.GetFullPath(output);
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         if(File.Exists(output)) throw new IOException("Archive exists: " + output);
         var staging = output + ".partial";
         if(File.Exists(staging)) throw new IOException("Partial archive exists: " + staging);
@@ -36,8 +38,12 @@ public static class FrameArchive
             }
         }
         File.Move(staging, output);
-        // Preserve the original capture directory until the user decides to remove it.
-        // This avoids destructive data loss if the archive is later misplaced.
+        // Delete ONLY the dedicated capture staging directory after a verified ZIP
+        // is at its final destination. Never delete user-selected directories.
+        if (!Path.GetFileName(folder).StartsWith("ScrollPDF-",StringComparison.Ordinal) ||
+            !Path.GetFullPath(folder).StartsWith(Path.GetFullPath(Path.GetTempPath()),StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Refusing cleanup outside ScrollPDF temporary capture directory");
+        Directory.Delete(folder, recursive: true);
         return output;
     }
 }
