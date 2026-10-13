@@ -11,7 +11,7 @@ public static class FrameArchive
 
     private static string Package(string folder, string output, IProgress<int>? progress)
     {
-        var paths = Directory.GetFiles(folder, "frame-*.bmp")
+        var paths = Directory.GetFiles(folder, "frame-*.png")
             .Concat(new[] { "region.txt", "completed.txt", "frames.csv" }.Select(n => Path.Combine(folder,n)).Where(File.Exists))
             .OrderBy(p => p, StringComparer.Ordinal).ToArray();
         if(paths.Length == 0) throw new InvalidDataException("No BMP screenshot frames");
@@ -23,7 +23,7 @@ public static class FrameArchive
         using(var zip = ZipFile.Open(staging, ZipArchiveMode.Create))
         {
             foreach(var path in paths)
-                zip.CreateEntryFromFile(path,Path.GetFileName(path),CompressionLevel.Fastest);
+                zip.CreateEntryFromFile(path,Path.GetFileName(path),CompressionLevel.NoCompression);
         }
         using(var zip = ZipFile.OpenRead(staging))
         {
