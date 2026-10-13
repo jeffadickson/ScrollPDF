@@ -145,6 +145,9 @@ public static class Geometry
 
         if (bestShift <= 1 && still <= best + 1)
             return new(0, best, 1, "No measurable scroll");
+        // A uniquely exact match is decisive even for sparse line art.
+        if (bestShift >= 2 && best <= 0.10 && second > 0.50)
+            return new(bestShift, best, 1, "Matched");
         if (bestShift < 2 || best > 18 || confidence < .20)
             return new(0, best, confidence, "Ambiguous frame overlap");
         return new(bestShift, best, confidence, "Matched");
