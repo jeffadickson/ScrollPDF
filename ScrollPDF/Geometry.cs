@@ -47,12 +47,24 @@ public static class Geometry
     public static int FindScrollDelta(Bitmap previous, Bitmap current, int maximumShift)
         => RegisterScroll(previous, current, maximumShift).Delta;
 
-    public readonly record struct ScrollMatch(int Delta, double Error, double Confidence, string Reason)
+    public enum MatchStatus { Stationary, Matched, Ambiguous }
+    public readonly record struct ScrollMatch(MatchStatus Status, int Delta, double Error, double Confidence);
+    public static ScrollMatch RegisterScroll(Bitmap previous, Bitmap current, int maximumShift)
+    {
+        var estimate = RegisterScrollCore(previous, current, maximumShift);
+        if (estimate.Reason == "Matched")
+            return new(MatchStatus.Matched, estimate.Delta, estimate.Error, estimate.Confidence);
+        if (estimate.Reason == "No measurable scroll")
+            return new(MatchStatus.Stationary, 0, estimate.Error, estimate.Confidence);
+        return new(MatchStatus.Ambiguous, 0, estimate.Error, estimate.Confidence);
+    }
+
+    private readonly record struct ScrollEstimate(int Delta, double Error, double Confidence, string Reason)
     {
         public bool Accepted => Delta > 0;
     }
 
-    public static ScrollMatch RegisterScroll(Bitmap previous, Bitmap current, int maximumShift)
+    private static ScrollEstimate RegisterScrollCore(Bitmap previous, Bitmap current, int maximumShift)
     {
         int w = Math.Min(previous.Width, current.Width);
         int h = Math.Min(previous.Height, current.Height);
