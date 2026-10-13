@@ -18,6 +18,8 @@ public sealed class RawFrameRecorder
     private long captured, saved;
     public long Captured => Interlocked.Read(ref captured);
     public long Saved => Interlocked.Read(ref saved);
+    public const int QueueCapacity = 16;
+    public int QueueSize => channel.Reader.Count;
     public string Folder => folder;
     public bool Finished => running?.IsCompleted ?? false;
     public Task Completion => running ?? Task.CompletedTask;
