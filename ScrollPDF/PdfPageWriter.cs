@@ -16,7 +16,8 @@ public sealed class PdfPageWriter : IDisposable
     private readonly int targetPixels;
     private Bitmap? pending;
     private bool finished;
-    public int PagesWritten => pdf.PageCount;
+    private int pagesWritten;
+    public int PagesWritten => pagesWritten;
     public int BufferedPixels => pending?.Height ?? 0;
 
     public PdfPageWriter(string path, int width, int pageHeight = 0)
@@ -91,6 +92,7 @@ public sealed class PdfPageWriter : IDisposable
         pageImage.Save(bytes, System.Drawing.Imaging.ImageFormat.Png);
         bytes.Position = 0;
         var page = pdf.AddPage();
+        pagesWritten++;
         page.Size = PdfSharp.PageSize.Letter;
         using var graphics = XGraphics.FromPdfPage(page);
         using var image = XImage.FromStream(bytes);
@@ -109,7 +111,7 @@ public sealed class PdfPageWriter : IDisposable
             pending.Dispose();
             pending = null;
         }
-        if (pdf.PageCount == 0) throw new InvalidOperationException("No content captured");
+        if (pagesWritten == 0) throw new InvalidOperationException("No content captured");
         pdf.Save(target);
         finished = true;
     }
