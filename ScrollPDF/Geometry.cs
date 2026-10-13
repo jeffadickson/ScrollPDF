@@ -39,41 +39,95 @@ public static class Geometry
         }
         return null;
     }
+    /// <summary>
+    /// Match successive captures using textured central columns and coarse-to-fine vertical registration.
+    /// Returns zero if alignment is ambiguous; a zero result must not be interpreted as proof
+    /// that the screen has not moved.
+    /// </summary>
     public static int FindScrollDelta(Bitmap previous, Bitmap current, int maximumShift)
+        => RegisterScroll(previous, current, maximumShift).Delta;
+
+    public readonly record struct ScrollMatch(int Delta, double Error, double Confidence, string Reason)
+    {
+        public bool Accepted => Delta > 0;
+    }
+
+    public static ScrollMatch RegisterScroll(Bitmap previous, Bitmap current, int maximumShift)
     {
         int w = Math.Min(previous.Width, current.Width);
         int h = Math.Min(previous.Height, current.Height);
-        int max = Math.Min(Math.Max(0, maximumShift), h - 24);
-        if (w < 40 || max < 2) return 0;
-        int stepX = Math.Max(1, w / 72), stepY = 5;
-        double best = double.MaxValue, zero = Difference(previous, current, 0, w, h, stepX, stepY);
-        int bestShift = 0;
-        for (int shift = 2; shift <= max; shift += 3)
+        int maxShift = Math.Min(Math.Max(0, maximumShift), (int)(h * .70));
+        if (w < 80 || h < 100 || maxShift < 3)
+            return new(0, double.PositiveInfinity, 0, "Capture region too small");
+
+        // Sample only the central content region, avoiding fixed toolbars and scrollbars.
+        // Use a deterministic rectangular grid rather than per-candidate GetPixel calls.
+        const int nx = 56;
+        int stepY = Math.Max(2, h / 180);
+        int ny = (h + stepY - 1) / stepY;
+        byte[,] a = new byte[ny, nx], b = new byte[ny, nx];
+        int[] xs = new int[nx];
+        for (int x = 0; x < nx; x++)
+            xs[x] = w / 10 + x * (w * 8 / 10 - 1) / (nx - 1);
+        for (int y = 0; y < ny; y++)
         {
-            double err = Difference(previous, current, shift, w, h, stepX, stepY);
-            if (err < best) { best = err; bestShift = shift; }
-        }
-        int approx = bestShift;
-        for (int s = Math.Max(1, approx - 3); s <= Math.Min(max, approx + 3); s++)
-        {
-            double err = Difference(previous, current, s, w, h, stepX, stepY);
-            if (err < best) { best = err; bestShift = s; }
-        }
-        if (bestShift < 2 || best > 20 || (zero - best) < 3.5) return 0;
-        return bestShift;
-    }
-    private static double Difference(Bitmap a, Bitmap b, int shift, int w, int h, int stepX, int stepY)
-    {
-        long difference = 0, count = 0;
-        for (int y = 6; y < h - shift - 6; y += stepY)
-            for (int x = Math.Max(0, w / 20); x < w - w / 20; x += stepX)
+            int yy = Math.Min(h - 1, y * stepY);
+            for (int x = 0; x < nx; x++)
             {
-                var ca = a.GetPixel(x, y + shift);
-                var cb = b.GetPixel(x, y);
-                difference += Math.Abs(ca.R - cb.R) + Math.Abs(ca.G - cb.G) + Math.Abs(ca.B - cb.B);
-                count += 3;
+                var p = previous.GetPixel(xs[x], yy);
+                var q = current.GetPixel(xs[x], yy);
+                a[y, x] = (byte)((p.R * 77 + p.G * 150 + p.B * 29) >> 8);
+                b[y, x] = (byte)((q.R * 77 + q.G * 150 + q.B * 29) >> 8);
             }
-        return count == 0 ? double.MaxValue : (double)difference / count;
+        }
+
+        // Compare the overlap of old frame shifted up against the new frame.
+        // Scoring uses differences weighted toward informative (non-flat) regions.
+        double Score(int delta)
+        {
+            int offset = (int)Math.Round((double)delta / stepY);
+            int stop = ny - offset - 3;
+            if (stop < ny / 4) return double.PositiveInfinity;
+            double error = 0, weight = 0;
+            for (int y = 2; y < stop; y += 2)
+                for (int x = 2; x < nx - 2; x += 2)
+                {
+                    int v = a[y + offset, x], t = b[y, x];
+                    int tex = Math.Max(Math.Abs(a[y + offset, x + 1] - a[y + offset, x - 1]),
+                                       Math.Abs(a[y + offset + 1, x] - a[y + offset - 1, x]));
+                    if (tex < 8) continue;
+                    double wt = Math.Min(48, tex);
+                    error += wt * Math.Abs(v - t);
+                    weight += wt;
+                }
+            return weight < 500 ? double.PositiveInfinity : error / weight;
+        }
+
+        int bestShift = 0;
+        double best = double.PositiveInfinity;
+        for (int shift = 0; shift <= maxShift; shift += stepY * 3)
+        {
+            double score = Score(shift);
+            if (score < best) { best = score; bestShift = shift; }
+        }
+        int rough = bestShift;
+        for (int shift = Math.Max(0, rough - stepY * 4);
+             shift <= Math.Min(maxShift, rough + stepY * 4); shift += stepY)
+        {
+            double score = Score(shift);
+            if (score < best) { best = score; bestShift = shift; }
+        }
+        if (double.IsInfinity(best))
+            return new(0, best, 0, "Insufficient textured overlap");
+        // A small difference to the static frame is a genuine stationary capture.
+        double still = Score(0);
+        if (bestShift < stepY * 2 || still <= best + 1)
+            return new(0, best, 1, "No measurable scroll");
+        // A poor match must not generate invented missing/duplicated document content.
+        double confidence = Math.Clamp((still - best) / Math.Max(1, still), 0, 1);
+        if (best > 19 || confidence < .35)
+            return new(0, best, confidence, "Ambiguous frame overlap");
+        return new(bestShift, best, confidence, "Matched");
     }
     public static Bitmap Crop(Bitmap bmp, Rectangle r)
     {
