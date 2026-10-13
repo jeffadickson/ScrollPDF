@@ -1,44 +1,101 @@
 using System.Drawing;
 using System.Windows.Forms;
 namespace ScrollPDF;
+
 public sealed class MainForm : Form
 {
     private readonly Button region = new() { Text = "Select capture region", Width = 175 };
     private readonly Button start = new() { Text = "Start", Width = 90 };
-    private readonly Button stop = new() { Text = "Stop", Width = 90, Enabled = false };
-    private readonly Label status = new() { Text = "Select a region, then start capturing. Scroll slowly downward.", AutoSize = true };
+    private readonly Button stop = new() { Text = "Stop and save", Width = 110, Enabled = false };
+    private readonly Label status = new() { Text = "Select a region and start scrolling.", AutoSize = false, Height = 28, Dock = DockStyle.Top };
+    private readonly Label counters = new() { AutoSize = false, Height = 90, Dock = DockStyle.Top,
+        Font = new Font("Consolas",10), Text = "Frames: 0   Analyzed: 0   Saved: 0" };
+    private readonly ProgressBar activity = new() { Dock = DockStyle.Top, Height = 18, Style = ProgressBarStyle.Marquee, Visible = false };
+    private readonly System.Windows.Forms.Timer refresh = new() { Interval = 250 };
     private Rectangle? bounds;
     private CapturePipeline? pipeline;
+    private bool finishing;
     public MainForm()
     {
-        Text = "ScrollPDF"; Width = 610; Height = 180; MinimumSize = new Size(580,180);
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 48, Padding = new Padding(8) };
-        bar.Controls.AddRange([region,start,stop]); Controls.Add(bar);
-        status.Dock = DockStyle.Fill; status.Padding = new Padding(12); Controls.Add(status);
-        region.Click += (_,_) => { using var picker = new RegionPicker(); if (picker.ShowDialog(this) == DialogResult.OK) { bounds = picker.SelectedRegion; status.Text = $"Region: {bounds}"; } };
+        Text = "ScrollPDF – capture monitor";
+        Width = 680; Height = 275; MinimumSize = new Size(610,260);
+        var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 52, Padding = new Padding(8) };
+        bar.Controls.AddRange([region,start,stop]);
+        Controls.Add(counters);
+        Controls.Add(activity);
+        Controls.Add(status);
+        Controls.Add(bar);
+        refresh.Tick += (_,_) => RefreshCounters();
+        refresh.Start();
+        region.Click += (_,_) => {
+            using var picker = new RegionPicker();
+            if (picker.ShowDialog(this) == DialogResult.OK)
+            {
+                bounds = picker.SelectedRegion;
+                status.Text = $"Selected region: {bounds}";
+            }
+        };
         start.Click += async (_,_) => await BeginCapture();
         stop.Click += async (_,_) => await EndCapture();
-        FormClosing += (_,e) => { if (pipeline is not null) { e.Cancel = true; status.Text = "Stop capture before closing."; } };
+        FormClosing += (_,e) => {
+            if (pipeline is not null) { e.Cancel = true; status.Text = "Stop and save before closing."; }
+        };
     }
+
+    private void RefreshCounters()
+    {
+        var p = pipeline;
+        if (p is null) return;
+        counters.Text =
+            $"Captured: {p.CapturedFrames,7:N0}   Analyzed: {p.AnalyzedFrames,7:N0}   Archived: {p.ArchivedFrames,7:N0}\n" +
+            $"PDF pages: {p.PagesWritten,5}   Last scroll: {p.LastDisplacement,5} px   Confidence: {p.LastConfidence,6:P0}\n" +
+            $"Pending capture: {Math.Max(0, p.CapturedFrames - p.AnalyzedFrames),5:N0}   " +
+            $"Pending archive: {Math.Max(0, p.CapturedFrames - p.ArchivedFrames),5:N0}";
+        if (finishing) status.Text = "Stopping capture; draining queues and writing final PDF...";
+    }
+
     private async Task BeginCapture()
     {
         if (bounds is null) { MessageBox.Show("Select a screen region first."); return; }
-        using var dialog = new SaveFileDialog { Filter="PDF document (*.pdf)|*.pdf", FileName="capture.pdf", DefaultExt="pdf" };
-        if (dialog.ShowDialog(this)!=DialogResult.OK) return;
+        using var dialog = new SaveFileDialog {
+            Filter = "PDF document (*.pdf)|*.pdf", FileName = "capture.pdf", DefaultExt = "pdf"
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            pipeline = new CapturePipeline(bounds.Value,dialog.FileName,s => BeginInvoke(new Action(() => status.Text = s)));
+            pipeline = new CapturePipeline(bounds.Value, dialog.FileName, s => {
+                if (!IsDisposed && IsHandleCreated)
+                    BeginInvoke(new Action(() => { if (!finishing) status.Text = s; }));
+            });
             start.Enabled = false; stop.Enabled = true; region.Enabled = false;
+            activity.Visible = true;
+            status.Text = "Recording — scroll steadily down. Frames are archived for diagnostics.";
             await pipeline.StartAsync();
         }
-        catch (Exception ex) { pipeline = null; start.Enabled = region.Enabled = true; stop.Enabled = false; MessageBox.Show(ex.Message,"Capture error"); }
+        catch (Exception ex)
+        {
+            pipeline = null; start.Enabled = region.Enabled = true;
+            stop.Enabled = false; activity.Visible = false;
+            MessageBox.Show(ex.Message,"Capture error");
+        }
     }
+
     private async Task EndCapture()
     {
         if (pipeline is null) return;
-        stop.Enabled = false;
-        try { await pipeline.StopAsync(); status.Text = "PDF saved."; }
+        stop.Enabled = false; finishing = true;
+        try
+        {
+            await pipeline.StopAsync();
+            RefreshCounters();
+            status.Text = $"Saved PDF ({pipeline.PagesWritten} pages). Raw frames: {pipeline.RawDirectory}";
+        }
         catch (Exception ex) { status.Text = "Capture failed: " + ex.Message; }
-        finally { pipeline = null; start.Enabled = region.Enabled = true; }
+        finally
+        {
+            finishing = false; pipeline = null;
+            activity.Visible = false;
+            start.Enabled = region.Enabled = true;
+        }
     }
 }
