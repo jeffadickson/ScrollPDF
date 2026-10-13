@@ -21,6 +21,7 @@ public sealed class MainForm : Form
     private CapturePipeline? pipeline;
     private RawFrameRecorder? recorder;
     private bool finishing;
+    private int zipPercent = -1;
     private bool handlingUnexpectedStop;
     public MainForm()
     {
@@ -57,8 +58,16 @@ public sealed class MainForm : Form
     private void RefreshCounters()
     {
         var p = pipeline;
+        if (zipPercent >= 0)
+        {
+            queueBar.Maximum = 100;
+            queueBar.Value = Math.Clamp(zipPercent, 0, 100);
+            queueLabel.Text = $"Verifying ZIP archive: {zipPercent}%";
+            return;
+        }
         if (recorder is { } r)
         {
+            queueBar.Maximum = RawFrameRecorder.QueueCapacity;
             int queued = r.QueueSize;
             queueBar.Value = Math.Clamp(queued, queueBar.Minimum, queueBar.Maximum);
             queueLabel.Text = $"PNG writer queue: {queued} / {RawFrameRecorder.QueueCapacity} frames ({queued * 100 / RawFrameRecorder.QueueCapacity}%)";
@@ -158,7 +167,12 @@ public sealed class MainForm : Form
             try
             {
                 await r.StopAsync();
-                status.Text = $"Saved {r.Saved:N0} frames in {r.Folder}";
+                status.Text = "Packing and verifying screenshots in background...";
+                zipPercent = 0;
+                var progress = new Progress<int>(p => zipPercent = p);
+                string zip = await FrameArchive.PackageAsync(r.Folder, progress);
+                zipPercent = 100;
+                status.Text = $"Saved {r.Saved:N0} screenshots to {zip}. Original PNG files retained.";
             }
             catch (Exception ex)
             {
@@ -168,6 +182,9 @@ public sealed class MainForm : Form
             finally
             {
                 recorder = null; finishing = false;
+                zipPercent = -1;
+                queueBar.Maximum = RawFrameRecorder.QueueCapacity;
+                queueBar.Value = 0;
                 activity.Visible = false;
                 start.Enabled = region.Enabled = rawOnly.Enabled = true;
             }
