@@ -11,6 +11,8 @@ public sealed class PdfPageWriter : IDisposable
     private readonly List<Bitmap> chunks=new();
     private int bufferedHeight;
     private bool finished;
+    public int PagesWritten => pdf.PageCount;
+    public int BufferedPixels => bufferedHeight;
     public PdfPageWriter(string path,int width,int pageHeight=0)
     {
         target=path;this.width=width;
