@@ -27,7 +27,24 @@ public static class AdaptivePng
         ArgumentNullException.ThrowIfNull(bitmap);
         ArgumentNullException.ThrowIfNull(stream);
         if (bitmap.PixelFormat != PixelFormat.Format24bppRgb)
-            throw new ArgumentException("Capture must be 24-bit RGB",nameof(bitmap));
+        {
+            // Bitmap(width,height) defaults to 32-bit ARGB. Screenshot data is
+            // opaque: normalize it to the RGB storage format used by this PNG
+            // encoder. Preserve the original bitmap and never mutate caller data.
+            if (bitmap.PixelFormat != PixelFormat.Format32bppArgb &&
+                bitmap.PixelFormat != PixelFormat.Format32bppPArgb &&
+                bitmap.PixelFormat != PixelFormat.Format32bppRgb)
+                throw new ArgumentException("Expected a 24/32-bit bitmap", nameof(bitmap));
+            using var rgb = new Bitmap(bitmap.Width,bitmap.Height,PixelFormat.Format24bppRgb);
+            using (var graphics = Graphics.FromImage(rgb))
+            {
+                graphics.Clear(Color.White);
+                graphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                graphics.DrawImageUnscaled(bitmap,0,0);
+            }
+            Write(rgb,stream,level);
+            return;
+        }
         int width=bitmap.Width, height=bitmap.Height;
         stream.Write(new byte[] {137,80,78,71,13,10,26,10});
         byte[] header=new byte[13];
