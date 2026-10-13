@@ -48,3 +48,13 @@ Compare real capture duration, total frames, measured frame intervals (using `ff
 - 30 FPS is a target, not a guaranteed measured capture rate.
 - A video frame captured after a large scroll jump cannot recover skipped document content.
 - Verify that the selected window remains visible and at fixed zoom.
+
+## Process Recording in Windows GUI
+
+The capture dashboard includes **Process Recording**. After recording ends, select the MKV, choose an output folder, and let the Python worker create `reconstructed.pdf` and `diagnostics.json`. Requires a Python installation accessible through `py -3` and packages `opencv-python numpy Pillow reportlab`.
+
+```powershell
+py -3 -m pip install opencv-python numpy Pillow reportlab
+```
+
+**Current quality gate:** reconstructed page count alone does not establish pixel-perfect capture. The 689-frame reference recording reconstructs 12 pages, but the die photograph on page 9 contains a visible horizontal seam. A full-resolution offset refinement test did not change that output. Do not treat this prototype as producing a validated faithful copy until seam validation and image-ground-truth comparison are implemented.
