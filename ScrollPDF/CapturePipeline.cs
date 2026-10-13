@@ -18,6 +18,15 @@ public sealed class CapturePipeline
     private readonly Channel<Bitmap> strips = Channel.CreateBounded<Bitmap>(
         new BoundedChannelOptions(12) {SingleReader=true,SingleWriter=true,FullMode=BoundedChannelFullMode.Wait});
     private Task? work;
+    public long CapturedFrames => Interlocked.Read(ref captured);
+    public long AnalyzedFrames => Interlocked.Read(ref analyzed);
+    public long ArchivedFrames => Interlocked.Read(ref archived);
+    public int PagesWritten => Volatile.Read(ref pagesWritten);
+    public double LastConfidence => Volatile.Read(ref lastConfidence);
+    public int LastDisplacement => Volatile.Read(ref lastDisplacement);
+    private long captured, analyzed, archived;
+    private int pagesWritten, lastDisplacement;
+    private double lastConfidence;
     public string RawDirectory => Path.ChangeExtension(output,null) + ".frames";
 
     public CapturePipeline(Rectangle region,string output,Action<string> status)
@@ -63,6 +72,7 @@ public sealed class CapturePipeline
                     try {await raw.Writer.WriteAsync((number,archiveCopy),token);}
                     catch {archiveCopy.Dispose();throw;}
                     await frames.Writer.WriteAsync((number,bitmap),token);
+                    Interlocked.Increment(ref captured);
                     number++;
                 }
                 catch {bitmap.Dispose();throw;}
@@ -79,6 +89,7 @@ public sealed class CapturePipeline
         {
             using(item.bitmap)
                 item.bitmap.Save(Path.Combine(RawDirectory,$"frame-{item.number:D7}.png"),ImageFormat.Png);
+            Interlocked.Increment(ref archived);
         }
     }
 
@@ -89,6 +100,7 @@ public sealed class CapturePipeline
         {
             await foreach(var item in frames.Reader.ReadAllAsync(failed.Token))
             {
+                Interlocked.Increment(ref analyzed);
                 Bitmap current=item.bitmap;
                 try
                 {
@@ -101,6 +113,8 @@ public sealed class CapturePipeline
                     else
                     {
                         var match=Geometry.RegisterScroll(previous,current,(int)(current.Height*.66));
+                        Volatile.Write(ref lastConfidence, match.Confidence);
+                        Volatile.Write(ref lastDisplacement, match.Delta);
                         if(match.Status==Geometry.MatchStatus.Ambiguous)
                             throw new InvalidDataException($"Uncertain alignment at frame {item.number}; error {match.Error:F2}, confidence {match.Confidence:P0}. Raw frames retained in {RawDirectory}");
                         if(match.Status==Geometry.MatchStatus.Matched)
@@ -122,8 +136,13 @@ public sealed class CapturePipeline
     {
         using var document=new PdfPageWriter(output,region.Width);
         await foreach(var strip in strips.Reader.ReadAllAsync(failed.Token))
-            using(strip) document.Append(strip);
+            {
+                using(strip) document.Append(strip);
+                Volatile.Write(ref pagesWritten, document.PagesWritten);
+            }
+        status("Finalizing PDF...");
         document.Finish();
+        Volatile.Write(ref pagesWritten,document.PagesWritten);
     }
 
     public async Task StopAsync()
