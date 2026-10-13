@@ -10,6 +10,7 @@ public sealed class RawFrameRecorder
     private readonly Rectangle area;
     private readonly string folder;
     private readonly CancellationTokenSource stop = new();
+    private readonly CancellationTokenSource writerFailed = new();
     private readonly Channel<(long Id, Bitmap Frame)> channel =
         Channel.CreateBounded<(long, Bitmap)>(new BoundedChannelOptions(16)
         { SingleReader = true, SingleWriter = true, FullMode = BoundedChannelFullMode.Wait });
@@ -38,6 +39,10 @@ public sealed class RawFrameRecorder
     {
         var writer = Task.Run(WriteAsync);
         var producer = Task.Run(CaptureAsync);
+        _ = writer.ContinueWith(t =>
+        {
+            if (t.IsFaulted) { writerFailed.Cancel(); stop.Cancel(); }
+        }, TaskContinuationOptions.ExecuteSynchronously);
         await Task.WhenAll(producer, writer);
         File.WriteAllText(Path.Combine(folder, "completed.txt"), $"Captured={Captured}\nSaved={Saved}\n");
     }
@@ -45,24 +50,26 @@ public sealed class RawFrameRecorder
     private async Task CaptureAsync()
     {
         long n = 0;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(stop.Token,writerFailed.Token);
+        var token = linked.Token;
         try
         {
-            while (!stop.IsCancellationRequested)
+            while (!token.IsCancellationRequested)
             {
                 var bmp = new Bitmap(area.Width, area.Height, PixelFormat.Format24bppRgb);
                 try
                 {
                     using(var graphics = Graphics.FromImage(bmp))
                         graphics.CopyFromScreen(area.Location, Point.Empty, area.Size);
-                    await channel.Writer.WriteAsync((n,bmp), stop.Token);
+                    await channel.Writer.WriteAsync((n,bmp), token);
                 }
                 catch { bmp.Dispose(); throw; }
                 n++; Interlocked.Increment(ref captured);
-                try { await Task.Delay(125, stop.Token); }
-                catch(OperationCanceledException) when(stop.IsCancellationRequested) { break; }
+                try { await Task.Delay(125, token); }
+                catch(OperationCanceledException) when(token.IsCancellationRequested) { break; }
             }
         }
-        catch(OperationCanceledException) when(stop.IsCancellationRequested) { }
+        catch(OperationCanceledException) when(token.IsCancellationRequested) { }
         finally { channel.Writer.TryComplete(); }
     }
 
@@ -82,5 +89,6 @@ public sealed class RawFrameRecorder
         stop.Cancel();
         if(running != null) await running;
         stop.Dispose();
+        writerFailed.Dispose();
     }
 }
