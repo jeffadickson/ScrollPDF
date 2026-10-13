@@ -21,6 +21,8 @@ public sealed class RawFrameRecorder
     public long BackpressureEvents => Interlocked.Read(ref backpressureEvents);
     private Task? running;
     private long captured, saved;
+    private int currentCompression;
+    public string CompressionMode => ((System.IO.Compression.CompressionLevel)Volatile.Read(ref currentCompression)).ToString();
     public const int TargetFps = 20;
     public double ActualFps => Captured / Math.Max(.001, stopwatch.Elapsed.TotalSeconds);
     private readonly Stopwatch stopwatch = new();
@@ -118,8 +120,10 @@ public sealed class RawFrameRecorder
         await foreach(var item in channel.Reader.ReadAllAsync())
             using(item.Frame)
             {
-                var path = Path.Combine(folder,$"frame-{item.Id:D7}.bmp");
-                item.Frame.Save(path,ImageFormat.Bmp);
+                var path = Path.Combine(folder,$"frame-{item.Id:D7}.png");
+                var effort = AdaptivePng.LevelForOccupancy(channel.Reader.Count,QueueCapacity);
+                Volatile.Write(ref currentCompression,(int)effort);
+                AdaptivePng.Save(item.Frame,path,effort);
                 long prior = previousWrittenTicks;
                 previousWrittenTicks = item.Ticks;
                 string gap = prior == 0 ? "" :
