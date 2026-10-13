@@ -4,6 +4,41 @@ using Xunit;
 public class GeometryTests
 {
     [Fact]
+    public void RawFrameZipPreservesFullSequenceAndVerifiesBytes()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "scrollpdf-zip-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        string zipPath = folder + ".zip";
+        try
+        {
+            for(int i=0;i<4;i++)
+            {
+                using var frame = new Bitmap(160,120);
+                using(var graphics = Graphics.FromImage(frame))
+                {
+                    graphics.Clear(Color.White);
+                    graphics.FillRectangle(Brushes.Black,10,10+i*20,110,4);
+                }
+                frame.Save(Path.Combine(folder,$"frame-{i:D7}.png"));
+            }
+            string result = FrameArchive.PackageAsync(folder).GetAwaiter().GetResult();
+            Assert.Equal(zipPath,result);
+            using var archive = System.IO.Compression.ZipFile.OpenRead(result);
+            Assert.Equal(4,archive.Entries.Count);
+            Assert.Equal(new[] {"frame-0000000.png","frame-0000001.png",
+                "frame-0000002.png","frame-0000003.png"},
+                archive.Entries.Select(e=>e.Name).OrderBy(n=>n).ToArray());
+            Assert.Equal(4,Directory.GetFiles(folder,"*.png").Length);
+        }
+        finally
+        {
+            if(File.Exists(zipPath)) File.Delete(zipPath);
+            if(Directory.Exists(folder)) Directory.Delete(folder,true);
+        }
+    }
+
+
+    [Fact]
     public void PageBreakAcrossTwoStripsProducesTwoPdfPages()
     {
         string file = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".pdf");
