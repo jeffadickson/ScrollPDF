@@ -1,69 +1,118 @@
 using System.Drawing;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf;
+
 namespace ScrollPDF;
-/// <summary>Single-owner PDF writer. Image conversion and PDF mutation remain serialized.</summary>
+
+/// <summary>
+/// Single-writer PDF assembler. Accumulates continuous strips before looking for
+/// viewer gutters, including gutters that straddle two capture-strip boundaries.
+/// </summary>
 public sealed class PdfPageWriter : IDisposable
 {
-    private readonly PdfDocument pdf=new();
-    private readonly string target; private readonly int width;
+    private readonly PdfDocument pdf = new();
+    private readonly string target;
+    private readonly int width;
     private readonly int targetPixels;
-    private readonly List<Bitmap> chunks=new();
-    private int bufferedHeight;
+    private Bitmap? pending;
     private bool finished;
     public int PagesWritten => pdf.PageCount;
-    public int BufferedPixels => bufferedHeight;
-    public PdfPageWriter(string path,int width,int pageHeight=0)
+    public int BufferedPixels => pending?.Height ?? 0;
+
+    public PdfPageWriter(string path, int width, int pageHeight = 0)
     {
-        target=path;this.width=width;
-        targetPixels=pageHeight>0?pageHeight:(int)Math.Round(width*11.0/8.5);
+        target = path;
+        this.width = width;
+        targetPixels = pageHeight > 0 ? pageHeight : (int)Math.Round(width * 11.0 / 8.5);
     }
-    public void Append(Bitmap input)
+
+    public void Append(Bitmap strip)
     {
-        if(finished) throw new InvalidOperationException("Already finished");
-        var boundary=Geometry.FindPageBreak(input);
-        if(boundary is { } b)
+        if (finished) throw new InvalidOperationException("Already finished");
+        if (strip.Width != width) throw new ArgumentException("Strip width mismatch");
+        // The lookbehind contains the footer of the previous strip while the
+        // incoming region supplies the upper surface of the next source page.
+        // Consequently gray gutters crossing an input-strip boundary are visible.
+        using (var combined = new Bitmap(width, (pending?.Height ?? 0) + strip.Height))
         {
-            if(b.start>0) AppendPixels(input,0,b.start);
-            FlushPage();
-            if(b.end<input.Height) AppendPixels(input,b.end,input.Height-b.end);
+            using (var g = Graphics.FromImage(combined))
+            {
+                g.Clear(Color.White);
+                if (pending != null) g.DrawImageUnscaled(pending, 0, 0);
+                g.DrawImageUnscaled(strip, 0, pending?.Height ?? 0);
+            }
+            pending?.Dispose();
+            pending = Geometry.Crop(combined, new Rectangle(0, 0, width, combined.Height));
         }
-        else AppendPixels(input,0,input.Height);
+        ProcessPages();
     }
-    private void AppendPixels(Bitmap source,int y,int height)
+
+    private void ProcessPages()
     {
-        while(height>0)
+        while (pending != null && pending.Height > 0)
         {
-            var space=targetPixels-bufferedHeight;
-            var count=Math.Min(space,height);
-            if(count==0) {FlushPage();continue;}
-            chunks.Add(Geometry.Crop(source,new Rectangle(0,y,width,count)));
-            bufferedHeight+=count;y+=count;height-=count;
-            if(bufferedHeight>=targetPixels)FlushPage();
+            var gutter = Geometry.FindPageBreak(pending);
+            if (gutter is { } boundary)
+            {
+                // Trim the gray viewer gutter completely from both document pages.
+                // The source pages retain their existing margins/white space.
+                Emit(0, boundary.start);
+                ReplacePending(boundary.end);
+                continue;
+            }
+
+            // Avoid arbitrary pagination in normal cases: allow room for a true
+            // source boundary beyond a normal printed page height. This safety
+            // fallback only applies to long continuous content with no gutter.
+            int maximum = Math.Max(targetPixels * 2, targetPixels + 500);
+            if (pending.Height > maximum)
+            {
+                Emit(0, targetPixels);
+                ReplacePending(targetPixels);
+                continue;
+            }
+            break;
         }
     }
-    private void FlushPage()
+
+    private void ReplacePending(int firstRow)
     {
-        if(bufferedHeight==0)return;
-        using var composed=new Bitmap(width,bufferedHeight);
-        using(var g=Graphics.FromImage(composed))
-        {
-            int y=0;foreach(var part in chunks){g.DrawImageUnscaled(part,0,y);y+=part.Height;part.Dispose();}
-        }
-        chunks.Clear();bufferedHeight=0;
-        using var buffer=new MemoryStream();composed.Save(buffer,System.Drawing.Imaging.ImageFormat.Png);buffer.Position=0;
-        var page=pdf.AddPage();page.Size=PdfSharp.PageSize.Letter;
-        using var gfx=XGraphics.FromPdfPage(page);
-        using var image=XImage.FromStream(buffer);
-        const double margin=18;
-        double scale=Math.Min((page.Width.Point-2*margin)/width,(page.Height.Point-2*margin)/composed.Height);
-        gfx.DrawImage(image,margin,margin,composed.Width*scale,composed.Height*scale);
+        var old = pending!;
+        var height = old.Height - firstRow;
+        pending = height > 0 ? Geometry.Crop(old, new Rectangle(0, firstRow, width, height)) : null;
+        old.Dispose();
     }
+
+    private void Emit(int y, int height)
+    {
+        if (height <= 2 || pending is null) return;
+        using var pageImage = Geometry.Crop(pending, new Rectangle(0, y, width, height));
+        using var bytes = new MemoryStream();
+        pageImage.Save(bytes, System.Drawing.Imaging.ImageFormat.Png);
+        bytes.Position = 0;
+        var page = pdf.AddPage();
+        page.Size = PdfSharp.PageSize.Letter;
+        using var graphics = XGraphics.FromPdfPage(page);
+        using var image = XImage.FromStream(bytes);
+        const double margin = 18;
+        var scale = Math.Min((page.Width.Point - margin * 2) / width,
+                             (page.Height.Point - margin * 2) / height);
+        graphics.DrawImage(image, margin, margin, width * scale, height * scale);
+    }
+
     public void Finish()
     {
-        if(finished)return;FlushPage();
-        if(pdf.PageCount==0) throw new InvalidOperationException("No content captured");
-        pdf.Save(target);finished=true;
+        if (finished) return;
+        if (pending != null)
+        {
+            Emit(0, pending.Height);
+            pending.Dispose();
+            pending = null;
+        }
+        if (pdf.PageCount == 0) throw new InvalidOperationException("No content captured");
+        pdf.Save(target);
+        finished = true;
     }
-    public void Dispose(){foreach(var c in chunks)c.Dispose();pdf.Dispose();}
+
+    public void Dispose() { pending?.Dispose(); pdf.Dispose(); }
 }
