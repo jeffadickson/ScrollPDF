@@ -4,6 +4,37 @@ using Xunit;
 public class GeometryTests
 {
     [Fact]
+    public void PageBreakAcrossTwoStripsProducesTwoPdfPages()
+    {
+        string file = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".pdf");
+        try
+        {
+            using var image = new Bitmap(320, 260);
+            using (var g = Graphics.FromImage(image))
+            {
+                g.Clear(Color.White);
+                using var gray = new SolidBrush(Color.FromArgb(195,195,195));
+                g.FillRectangle(gray,0,123,320,10);
+                g.FillRectangle(Brushes.Black,50,60,150,5);
+                g.FillRectangle(Brushes.Black,50,180,150,5);
+            }
+            using var upper = Geometry.Crop(image,new Rectangle(0,0,320,127));
+            using var lower = Geometry.Crop(image,new Rectangle(0,127,320,133));
+            using (var writer = new PdfPageWriter(file,320,800))
+            {
+                writer.Append(upper);
+                Assert.Equal(0,writer.PagesWritten);
+                writer.Append(lower);
+                Assert.Equal(1,writer.PagesWritten);
+                writer.Finish();
+                Assert.Equal(2,writer.PagesWritten);
+            }
+            Assert.True(new FileInfo(file).Length > 100);
+        }
+        finally { if(File.Exists(file)) File.Delete(file); }
+    }
+
+    [Fact]
     public void RepeatedChartGridCannotProduceConfidentWrongOffset()
     {
         using var canvas=new Bitmap(480,1200);
