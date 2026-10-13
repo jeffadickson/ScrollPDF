@@ -4,6 +4,34 @@ using Xunit;
 public class GeometryTests
 {
     [Fact]
+    public void RepeatedChartGridCannotProduceConfidentWrongOffset()
+    {
+        using var canvas=new Bitmap(480,1200);
+        using(var g=Graphics.FromImage(canvas))
+        {
+            g.Clear(Color.White);
+            using var pen=new Pen(Color.Gray);
+            for(int y=0;y<1200;y+=16) g.DrawLine(pen,40,y,440,y);
+            for(int x=40;x<440;x+=18) g.DrawLine(pen,x,0,x,1200);
+            for(int y=0;y<1200;y+=137) g.FillRectangle(Brushes.Black,60+y%87,y+7,23,3);
+        }
+        using var first=Geometry.Crop(canvas,new Rectangle(0,20,480,600));
+        using var second=Geometry.Crop(canvas,new Rectangle(0,93,480,600));
+        var m=Geometry.RegisterScroll(first,second,300);
+        Assert.True(m.Status!=Geometry.MatchStatus.Matched || Math.Abs(m.Delta-73)<=3,
+           $"Incorrect confident displacement: {m.Delta}px");
+    }
+    [Fact]
+    public void BlankPagesAreNeverConfidentlyMatched()
+    {
+        using var first=new Bitmap(480,600);
+        using var second=new Bitmap(480,600);
+        using(var g=Graphics.FromImage(first))g.Clear(Color.White);
+        using(var g=Graphics.FromImage(second))g.Clear(Color.White);
+        Assert.NotEqual(Geometry.MatchStatus.Matched,Geometry.RegisterScroll(first,second,300).Status);
+    }
+
+    [Fact]
     public void IpcDocumentBoundary_is_detected()
     {
         using var bmp=new Bitmap(Path.Combine(AppContext.BaseDirectory,"Fixtures","ipc-page-break.png"));
