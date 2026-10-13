@@ -11,10 +11,10 @@ public static class FrameArchive
 
     private static string Package(string folder, string output, IProgress<int>? progress)
     {
-        var paths = Directory.GetFiles(folder, "frame-*.png")
-            .Concat(new[] { "region.txt", "completed.txt" }.Select(n => Path.Combine(folder,n)).Where(File.Exists))
+        var paths = Directory.GetFiles(folder, "frame-*.bmp")
+            .Concat(new[] { "region.txt", "completed.txt", "frames.csv" }.Select(n => Path.Combine(folder,n)).Where(File.Exists))
             .OrderBy(p => p, StringComparer.Ordinal).ToArray();
-        if(paths.Length == 0) throw new InvalidDataException("No screenshot frames");
+        if(paths.Length == 0) throw new InvalidDataException("No BMP screenshot frames");
         output = Path.GetFullPath(output);
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         if(File.Exists(output)) throw new IOException("Archive exists: " + output);
@@ -23,7 +23,7 @@ public static class FrameArchive
         using(var zip = ZipFile.Open(staging, ZipArchiveMode.Create))
         {
             foreach(var path in paths)
-                zip.CreateEntryFromFile(path,Path.GetFileName(path),CompressionLevel.NoCompression);
+                zip.CreateEntryFromFile(path,Path.GetFileName(path),CompressionLevel.Optimal);
         }
         using(var zip = ZipFile.OpenRead(staging))
         {
