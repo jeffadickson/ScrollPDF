@@ -19,14 +19,14 @@ public class GeometryTests
                     graphics.Clear(Color.White);
                     graphics.FillRectangle(Brushes.Black,10,10+i*20,110,4);
                 }
-                frame.Save(Path.Combine(folder,$"frame-{i:D7}.png"));
+                frame.Save(Path.Combine(folder,$"frame-{i:D7}.bmp"),System.Drawing.Imaging.ImageFormat.Bmp);
             }
             string result = FrameArchive.PackageAsync(folder, zipPath).GetAwaiter().GetResult();
             Assert.Equal(zipPath,result);
             using var archive = System.IO.Compression.ZipFile.OpenRead(result);
             Assert.Equal(4,archive.Entries.Count);
-            Assert.Equal(new[] {"frame-0000000.png","frame-0000001.png",
-                "frame-0000002.png","frame-0000003.png"},
+            Assert.Equal(new[] {"frame-0000000.bmp","frame-0000001.bmp",
+                "frame-0000002.bmp","frame-0000003.bmp"},
                 archive.Entries.Select(e=>e.Name).OrderBy(n=>n).ToArray());
             Assert.False(Directory.Exists(folder));
         }
