@@ -6,7 +6,7 @@ public class GeometryTests
     [Fact]
     public void RawFrameZipPreservesFullSequenceAndVerifiesBytes()
     {
-        string folder = Path.Combine(Path.GetTempPath(), "scrollpdf-zip-" + Guid.NewGuid().ToString("N"));
+        string folder = Path.Combine(Path.GetTempPath(), "ScrollPDF-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         string zipPath = folder + ".zip";
         try
@@ -21,14 +21,14 @@ public class GeometryTests
                 }
                 frame.Save(Path.Combine(folder,$"frame-{i:D7}.png"));
             }
-            string result = FrameArchive.PackageAsync(folder).GetAwaiter().GetResult();
+            string result = FrameArchive.PackageAsync(folder, zipPath).GetAwaiter().GetResult();
             Assert.Equal(zipPath,result);
             using var archive = System.IO.Compression.ZipFile.OpenRead(result);
             Assert.Equal(4,archive.Entries.Count);
             Assert.Equal(new[] {"frame-0000000.png","frame-0000001.png",
                 "frame-0000002.png","frame-0000003.png"},
                 archive.Entries.Select(e=>e.Name).OrderBy(n=>n).ToArray());
-            Assert.Equal(4,Directory.GetFiles(folder,"*.png").Length);
+            Assert.False(Directory.Exists(folder));
         }
         finally
         {
