@@ -3,6 +3,24 @@ using ScrollPDF;
 using Xunit;
 public class GeometryTests
 {
+    [Fact]
+    public void Default32BitBitmapIsAcceptedByPngEncoder()
+    {
+        using var bitmap = new Bitmap(30,22); // GDI+ default 32-bit ARGB
+        using(var graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.White);
+            graphics.FillRectangle(Brushes.Black,4,5,13,8);
+        }
+        using var bytes = new MemoryStream();
+        AdaptivePng.Write(bitmap,bytes,System.IO.Compression.CompressionLevel.Fastest);
+        bytes.Position = 0;
+        using var roundTrip = new Bitmap(bytes);
+        Assert.Equal(bitmap.GetPixel(0,0).ToArgb(),roundTrip.GetPixel(0,0).ToArgb());
+        Assert.Equal(bitmap.GetPixel(7,8).ToArgb(),roundTrip.GetPixel(7,8).ToArgb());
+    }
+
+
     [Theory]
     [InlineData(0, 100, System.IO.Compression.CompressionLevel.Optimal)]
     [InlineData(29, 100, System.IO.Compression.CompressionLevel.Optimal)]
