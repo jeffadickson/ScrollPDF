@@ -12,6 +12,10 @@ public sealed class MainForm : Form
     private readonly Label counters = new() { AutoSize = false, Height = 90, Dock = DockStyle.Top,
         Font = new Font("Consolas",10), Text = "Frames: 0   Analyzed: 0   Saved: 0" };
     private readonly ProgressBar activity = new() { Dock = DockStyle.Top, Height = 18, Style = ProgressBarStyle.Marquee, Visible = false };
+    private readonly ProgressBar queueBar = new() { Dock = DockStyle.Top, Height = 23, Minimum = 0,
+        Maximum = RawFrameRecorder.QueueCapacity, Style = ProgressBarStyle.Continuous };
+    private readonly Label queueLabel = new() { Dock = DockStyle.Top, Height = 22,
+        Text = "PNG writer queue: 0 / 16 frames (0%)" };
     private readonly System.Windows.Forms.Timer refresh = new() { Interval = 250 };
     private Rectangle? bounds;
     private CapturePipeline? pipeline;
@@ -21,12 +25,14 @@ public sealed class MainForm : Form
     public MainForm()
     {
         Text = "ScrollPDF – capture monitor";
-        Width = 680; Height = 310; MinimumSize = new Size(610,260);
+        Width = 680; Height = 365; MinimumSize = new Size(610,330);
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 52, Padding = new Padding(8) };
         bar.Controls.AddRange([region,start,stop]);
         var mode = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 32 };
         mode.Controls.Add(rawOnly);
         Controls.Add(counters);
+        Controls.Add(queueBar);
+        Controls.Add(queueLabel);
         Controls.Add(mode);
         Controls.Add(activity);
         Controls.Add(status);
@@ -53,11 +59,16 @@ public sealed class MainForm : Form
         var p = pipeline;
         if (recorder is { } r)
         {
-            counters.Text = $"Captured: {r.Captured:N0}     PNG saved: {r.Saved:N0}     Backlog: {r.Captured-r.Saved:N0}";
+            int queued = r.QueueSize;
+            queueBar.Value = Math.Clamp(queued, queueBar.Minimum, queueBar.Maximum);
+            queueLabel.Text = $"PNG writer queue: {queued} / {RawFrameRecorder.QueueCapacity} frames ({queued * 100 / RawFrameRecorder.QueueCapacity}%)";
+            counters.Text = $"Captured: {r.Captured:N0}     PNG saved: {r.Saved:N0}     Waiting/in flight: {r.Captured-r.Saved:N0}";
             if (r.Finished && !finishing) status.Text = "Recording ended. Check image folder.";
             return;
         }
         if (p is null) return;
+        queueBar.Value = 0;
+        queueLabel.Text = "PNG-only writer queue: inactive during direct PDF capture";
         if (!finishing && !handlingUnexpectedStop && p.IsFinished)
         {
             handlingUnexpectedStop = true;
