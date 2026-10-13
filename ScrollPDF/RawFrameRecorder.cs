@@ -22,6 +22,10 @@ public sealed class RawFrameRecorder
     private Task? running;
     private long captured, saved;
     private int currentCompression;
+    private long optimalFrames, fastestFrames, uncompressedFrames;
+    public long OptimalFrames => Interlocked.Read(ref optimalFrames);
+    public long FastestFrames => Interlocked.Read(ref fastestFrames);
+    public long UncompressedFrames => Interlocked.Read(ref uncompressedFrames);
     public string CompressionMode => ((System.IO.Compression.CompressionLevel)Volatile.Read(ref currentCompression)).ToString();
     public const int TargetFps = 20;
     public double ActualFps => Captured / Math.Max(.001, stopwatch.Elapsed.TotalSeconds);
@@ -52,7 +56,7 @@ public sealed class RawFrameRecorder
             throw new IOException("Recording directory is not empty");
         Directory.CreateDirectory(folder);
         File.WriteAllText(Path.Combine(folder, "region.txt"), $"{area.X},{area.Y},{area.Width},{area.Height}");
-        File.WriteAllText(Path.Combine(folder, "frames.csv"),"frame,utc,monotonic_ticks,gap_ms,file"+Environment.NewLine);
+        File.WriteAllText(Path.Combine(folder, "frames.csv"),"frame,utc,monotonic_ticks,gap_ms,file,compression_mode,queue_depth"+Environment.NewLine);
         stopwatch.Start();
         running = RunAsync();
         return Task.CompletedTask;
@@ -68,7 +72,7 @@ public sealed class RawFrameRecorder
         }, TaskContinuationOptions.ExecuteSynchronously);
         await Task.WhenAll(producer, writer);
         File.WriteAllText(Path.Combine(folder, "completed.txt"),
-            $"Captured={Captured}\nSaved={Saved}\nMaxGapMs={MaximumGapMilliseconds}\nBackpressureEvents={BackpressureEvents}\nQueueCapacity={QueueCapacity}\n");
+            $"Captured={Captured}\nSaved={Saved}\nMaxGapMs={MaximumGapMilliseconds}\nBackpressureEvents={BackpressureEvents}\nQueueCapacity={QueueCapacity}\nOptimalFrames={OptimalFrames}\nFastestFrames={FastestFrames}\nUncompressedFrames={UncompressedFrames}\n");
     }
 
     private async Task CaptureAsync()
@@ -121,15 +125,22 @@ public sealed class RawFrameRecorder
             using(item.Frame)
             {
                 var path = Path.Combine(folder,$"frame-{item.Id:D7}.png");
-                var effort = AdaptivePng.LevelForOccupancy(channel.Reader.Count,QueueCapacity);
+                int depth = channel.Reader.Count;
+                var effort = AdaptivePng.LevelForOccupancy(depth,QueueCapacity);
                 Volatile.Write(ref currentCompression,(int)effort);
                 AdaptivePng.Save(item.Frame,path,effort);
+                switch(effort)
+                {
+                    case System.IO.Compression.CompressionLevel.Optimal: Interlocked.Increment(ref optimalFrames); break;
+                    case System.IO.Compression.CompressionLevel.Fastest: Interlocked.Increment(ref fastestFrames); break;
+                    default: Interlocked.Increment(ref uncompressedFrames); break;
+                }
                 long prior = previousWrittenTicks;
                 previousWrittenTicks = item.Ticks;
                 string gap = prior == 0 ? "" :
                     ((item.Ticks - prior) * 1000.0 / Stopwatch.Frequency).ToString("F3",System.Globalization.CultureInfo.InvariantCulture);
                 File.AppendAllText(Path.Combine(folder,"frames.csv"),
-                    $"{item.Id},{item.Utc:O},{item.Ticks},{gap},{Path.GetFileName(path)}"+Environment.NewLine);
+                    $"{item.Id},{item.Utc:O},{item.Ticks},{gap},{Path.GetFileName(path)},{effort},{depth}"+Environment.NewLine);
                 Interlocked.Increment(ref saved);
             }
     }
