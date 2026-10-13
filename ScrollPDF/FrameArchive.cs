@@ -36,6 +36,8 @@ public static class FrameArchive
             }
         }
         File.Move(staging, output);
+        // Preserve the original capture directory until the user decides to remove it.
+        // This avoids destructive data loss if the archive is later misplaced.
         return output;
     }
 }
