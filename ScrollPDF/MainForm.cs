@@ -5,6 +5,7 @@ namespace ScrollPDF;
 public sealed class MainForm : Form
 {
     private readonly Button region = new() { Text = "Select capture region", Width = 175 };
+    private readonly CheckBox rawOnly = new() { Text = "Save raw PNG frames only", Checked = true, AutoSize = true };
     private readonly Button start = new() { Text = "Start", Width = 90 };
     private readonly Button stop = new() { Text = "Stop and save", Width = 110, Enabled = false };
     private readonly Label status = new() { Text = "Select a region and start scrolling.", AutoSize = false, Height = 28, Dock = DockStyle.Top };
@@ -14,15 +15,19 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer refresh = new() { Interval = 250 };
     private Rectangle? bounds;
     private CapturePipeline? pipeline;
+    private RawFrameRecorder? recorder;
     private bool finishing;
     private bool handlingUnexpectedStop;
     public MainForm()
     {
         Text = "ScrollPDF – capture monitor";
-        Width = 680; Height = 275; MinimumSize = new Size(610,260);
+        Width = 680; Height = 310; MinimumSize = new Size(610,260);
         var bar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 52, Padding = new Padding(8) };
         bar.Controls.AddRange([region,start,stop]);
+        var mode = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 32 };
+        mode.Controls.Add(rawOnly);
         Controls.Add(counters);
+        Controls.Add(mode);
         Controls.Add(activity);
         Controls.Add(status);
         Controls.Add(bar);
@@ -39,13 +44,19 @@ public sealed class MainForm : Form
         start.Click += async (_,_) => await BeginCapture();
         stop.Click += async (_,_) => await EndCapture();
         FormClosing += (_,e) => {
-            if (pipeline is not null) { e.Cancel = true; status.Text = "Stop and save before closing."; }
+            if (pipeline is not null || recorder is not null) { e.Cancel = true; status.Text = "Stop and save before closing."; }
         };
     }
 
     private void RefreshCounters()
     {
         var p = pipeline;
+        if (recorder is { } r)
+        {
+            counters.Text = $"Captured: {r.Captured:N0}     PNG saved: {r.Saved:N0}     Backlog: {r.Captured-r.Saved:N0}";
+            if (r.Finished && !finishing) status.Text = "Recording ended. Check image folder.";
+            return;
+        }
         if (p is null) return;
         if (!finishing && !handlingUnexpectedStop && p.IsFinished)
         {
@@ -63,6 +74,21 @@ public sealed class MainForm : Form
     private async Task BeginCapture()
     {
         if (bounds is null) { MessageBox.Show("Select a screen region first."); return; }
+        if (rawOnly.Checked)
+        {
+            using var chooser = new FolderBrowserDialog { Description = "Choose a new or empty folder for frame PNG files" };
+            if (chooser.ShowDialog(this) != DialogResult.OK) return;
+            try
+            {
+                recorder = new RawFrameRecorder(bounds.Value, chooser.SelectedPath);
+                await recorder.StartAsync();
+                start.Enabled = region.Enabled = rawOnly.Enabled = false;
+                stop.Enabled = true; activity.Visible = true;
+                status.Text = "Recording raw frames; stitching disabled.";
+            }
+            catch(Exception ex) { recorder = null; MessageBox.Show(ex.Message,"Recorder error"); }
+            return;
+        }
         using var dialog = new SaveFileDialog {
             Filter = "PDF document (*.pdf)|*.pdf", FileName = "capture.pdf", DefaultExt = "pdf"
         };
@@ -115,6 +141,27 @@ public sealed class MainForm : Form
 
     private async Task EndCapture()
     {
+        if (recorder is { } r)
+        {
+            stop.Enabled = false; finishing = true;
+            try
+            {
+                await r.StopAsync();
+                status.Text = $"Saved {r.Saved:N0} frames in {r.Folder}";
+            }
+            catch (Exception ex)
+            {
+                status.Text = "Archive failed: " + ex.Message;
+                MessageBox.Show(ex.Message, "Archive failed");
+            }
+            finally
+            {
+                recorder = null; finishing = false;
+                activity.Visible = false;
+                start.Enabled = region.Enabled = rawOnly.Enabled = true;
+            }
+            return;
+        }
         if (pipeline is null) return;
         stop.Enabled = false; finishing = true;
         try
